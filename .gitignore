@@ -26,4 +26,5 @@ docs/.vitepress/cache
 autoresearch/results/
 autoresearch-results.tsv
 
+package-lock.json
 pnpm-lock.yaml
