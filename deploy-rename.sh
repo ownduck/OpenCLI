@@ -1,6 +1,6 @@
 #!/bin/bash
-# 一次性：@jackwener/opencli → @woosau/opencli，然后构建并发布到 npm
-# 用法：sh deploy.sh
+# 仅换名（Git Bash）：@jackwener/opencli → @woosau/opencli
+# 用法：sh deploy-rename.sh
 
 cd "$(dirname "$0")"
 
@@ -13,19 +13,13 @@ grep -rl \
   --exclude-dir=.vitepress \
   --exclude-dir=.cache \
   --exclude-dir=.turbo \
-  --exclude=deploy.sh \
+  --exclude=deploy-rename.sh \
+  --exclude=deploy.cmd \
   '@jackwener/opencli' . | while IFS= read -r f; do
   sed -i 's|@jackwener/opencli|@woosau/opencli|g' "$f"
   echo "  $f"
 done
 
-echo "==> pnpm install"
-pnpm install
-
-echo "==> npm run build"
-npm run build
-
-echo "==> npm publish --access public"
-npm publish --access public
-
-echo "done: npm install -g @woosau/opencli"
+echo "rename done."
+echo "next (cmd/PowerShell): deploy.cmd"
+echo "  or with OTP: deploy.cmd 123456"
