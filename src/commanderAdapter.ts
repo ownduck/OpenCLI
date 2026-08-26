@@ -24,7 +24,6 @@ import {
   formatSiteCommandDescription,
   formatSiteHelpText,
   getRequestedHelpFormat,
-  installStructuredHelp,
   renderStructuredHelp,
   siteHelpData,
 } from './help.js';
