@@ -1,0 +1,85 @@
+import { spawn } from 'node:child_process';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+const repoRoot = path.resolve(here, '..', '..');
+
+function parseArgs(argv) {
+  const out = { text: '', file: '', videos: '', cdp: '', dryRun: false, format: '', timeout: '' };
+  const positional = [];
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === '--text') out.text = argv[++i] ?? '';
+    else if (a === '--file') out.file = argv[++i] ?? '';
+    else if (a === '--videos') out.videos = argv[++i] ?? '';
+    else if (a === '--cdp-endpoint') out.cdp = argv[++i] ?? '';
+    else if (a === '--format') out.format = argv[++i] ?? '';
+    else if (a === '--timeout') out.timeout = argv[++i] ?? '';
+    else if (a === '--dry-run') out.dryRun = true;
+    else if (a === '--help' || a === '-h') out.help = true;
+    else positional.push(a);
+  }
+  if (!out.text && !out.file && positional.length) out.text = positional.join(' ');
+  return out;
+}
+
+function resolveTsx() {
+  const candidates = [
+    path.join(repoRoot, 'node_modules', 'tsx', 'dist', 'cli.mjs'),
+    path.join(repoRoot, 'node_modules', '.bin', 'tsx'),
+  ];
+  for (const c of candidates) if (fs.existsSync(c)) return c;
+  return null;
+}
+
+function usage() {
+  console.log(`Manual runner for the tiktok publish adapter.
+
+Usage:
+  node clis/tiktok/publish.manual.mjs [options]
+
+Options (mirror the opencli tiktok publish args):
+  --text <text>            Video caption, or a path to a .txt file
+  --file <path.txt>        Read caption from a .txt file
+  --videos <a.mp4>         Local video path (required, single video)
+  --cdp-endpoint <url>     CDP endpoint of the logged-in Chrome (e.g. http://127.0.0.1:34764)
+  --dry-run                Fill everything, skip the final post
+  --format <fmt>           Output format: table|json|yaml|md|csv
+  --timeout <sec>          Max seconds for the publish command
+  -h, --help               Show this help
+
+Examples:
+  node clis/tiktok/publish.manual.mjs --text "hello" --videos ./clip.mp4 --cdp-endpoint http://127.0.0.1:34764 --dry-run
+  node clis/tiktok/publish.manual.mjs --file ./caption.txt --videos ./clip.mp4 --cdp-endpoint http://127.0.0.1:34764
+`);
+}
+
+async function main() {
+  const args = parseArgs(process.argv.slice(2));
+  if (args.help) { usage(); return 0; }
+
+  const cliArgs = ['tiktok', 'publish'];
+  if (args.file) cliArgs.push('--file', args.file);
+  else if (args.text) cliArgs.push(args.text);
+  if (args.videos) cliArgs.push('--videos', args.videos);
+  if (args.dryRun) cliArgs.push('--dry-run');
+  if (args.format) cliArgs.push('--format', args.format);
+  if (args.timeout) cliArgs.push('--timeout', String(args.timeout));
+  if (args.cdp) cliArgs.unshift('--cdp-endpoint', args.cdp);
+
+  const tsx = resolveTsx();
+  const cmd = tsx ? process.execPath : 'npx';
+  const spawnArgs = tsx ? [tsx, 'src/main.ts', ...cliArgs] : ['tsx', 'src/main.ts', ...cliArgs];
+
+  console.error(`> running: ${cmd} ${spawnArgs.join(' ')}\n`);
+  const child = spawn(cmd, spawnArgs, { cwd: repoRoot, stdio: 'inherit' });
+  const code = await new Promise((resolve) => child.on('close', resolve));
+  return code ?? 1;
+}
+
+main().then((code) => process.exit(code)).catch((err) => {
+  console.error(err);
+  process.exit(1);
+});

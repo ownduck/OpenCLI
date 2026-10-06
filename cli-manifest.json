@@ -14384,6 +14384,67 @@
   },
   {
     "site": "facebook",
+    "name": "publish",
+    "description": "Publish a text/image/video post to your Facebook feed",
+    "access": "write",
+    "domain": "www.facebook.com",
+    "strategy": "ui",
+    "browser": true,
+    "args": [
+      {
+        "name": "text",
+        "type": "str",
+        "required": false,
+        "positional": true,
+        "help": "Post body text, or a path to a .txt file (auto-read)"
+      },
+      {
+        "name": "file",
+        "type": "string",
+        "required": false,
+        "help": "Path to a .txt file whose content becomes the post body"
+      },
+      {
+        "name": "images",
+        "type": "string",
+        "required": false,
+        "help": "Comma-separated local image paths (jpg/png/gif/webp/bmp)"
+      },
+      {
+        "name": "videos",
+        "type": "string",
+        "required": false,
+        "help": "Local video path (mp4/mov/avi/mkv/webm/m4v)"
+      },
+      {
+        "name": "dry-run",
+        "type": "bool",
+        "default": false,
+        "required": false,
+        "help": "Fill everything, skip the final submit"
+      },
+      {
+        "name": "timeout",
+        "type": "int",
+        "default": 180,
+        "required": false,
+        "help": "Max seconds for the publish command (default: 180)"
+      }
+    ],
+    "columns": [
+      "status",
+      "url",
+      "post_id"
+    ],
+    "type": "js",
+    "modulePath": "facebook/publish.js",
+    "sourceFile": "facebook/publish.js",
+    "navigateBefore": true,
+    "siteSession": "persistent",
+    "defaultWindowMode": "foreground"
+  },
+  {
+    "site": "facebook",
     "name": "search",
     "description": "Search Facebook for people, pages, or posts",
     "access": "read",
@@ -19974,6 +20035,61 @@
   },
   {
     "site": "instagram",
+    "name": "publish",
+    "description": "Publish an image post with a caption to Instagram",
+    "access": "write",
+    "domain": "www.instagram.com",
+    "strategy": "ui",
+    "browser": true,
+    "args": [
+      {
+        "name": "text",
+        "type": "str",
+        "required": false,
+        "positional": true,
+        "help": "Post body text, or a path to a .txt file (auto-read)"
+      },
+      {
+        "name": "file",
+        "type": "string",
+        "required": false,
+        "help": "Path to a .txt file whose content becomes the post body"
+      },
+      {
+        "name": "images",
+        "type": "string",
+        "required": true,
+        "help": "Comma-separated local image paths (jpg/png/gif/webp/bmp)"
+      },
+      {
+        "name": "dry-run",
+        "type": "bool",
+        "default": false,
+        "required": false,
+        "help": "Fill everything, skip the final submit"
+      },
+      {
+        "name": "timeout",
+        "type": "int",
+        "default": 240,
+        "required": false,
+        "help": "Max seconds for the publish command (default: 240)"
+      }
+    ],
+    "columns": [
+      "status",
+      "url",
+      "post_id"
+    ],
+    "type": "js",
+    "modulePath": "instagram/publish.js",
+    "sourceFile": "instagram/publish.js",
+    "navigateBefore": true,
+    "siteSession": "persistent",
+    "defaultWindowMode": "foreground"
+  },
+  {
+    "site": "instagram",
     "name": "reel",
     "description": "Post an Instagram reel video",
     "access": "write",
@@ -23768,6 +23884,61 @@
     "modulePath": "linkedin/profile-read.js",
     "sourceFile": "linkedin/profile-read.js",
     "navigateBefore": "https://www.linkedin.com"
+  },
+  {
+    "site": "linkedin",
+    "name": "publish",
+    "description": "Publish a text/image post to your LinkedIn feed",
+    "access": "write",
+    "domain": "www.linkedin.com",
+    "strategy": "ui",
+    "browser": true,
+    "args": [
+      {
+        "name": "text",
+        "type": "str",
+        "required": false,
+        "positional": true,
+        "help": "Post body text, or a path to a .txt file (auto-read)"
+      },
+      {
+        "name": "file",
+        "type": "string",
+        "required": false,
+        "help": "Path to a .txt file whose content becomes the post body"
+      },
+      {
+        "name": "images",
+        "type": "string",
+        "required": false,
+        "help": "Comma-separated local image paths (jpg/png/gif/webp/bmp)"
+      },
+      {
+        "name": "dry-run",
+        "type": "bool",
+        "default": false,
+        "required": false,
+        "help": "Fill everything, skip the final submit"
+      },
+      {
+        "name": "timeout",
+        "type": "int",
+        "default": 180,
+        "required": false,
+        "help": "Max seconds for the publish command (default: 180)"
+      }
+    ],
+    "columns": [
+      "status",
+      "url",
+      "post_id"
+    ],
+    "type": "js",
+    "modulePath": "linkedin/publish.js",
+    "sourceFile": "linkedin/publish.js",
+    "navigateBefore": true,
+    "siteSession": "persistent",
+    "defaultWindowMode": "foreground"
   },
   {
     "site": "linkedin",
@@ -38114,6 +38285,61 @@
   },
   {
     "site": "tiktok",
+    "name": "publish",
+    "description": "Upload a video with a caption to TikTok",
+    "access": "write",
+    "domain": "www.tiktok.com",
+    "strategy": "ui",
+    "browser": true,
+    "args": [
+      {
+        "name": "text",
+        "type": "str",
+        "required": false,
+        "positional": true,
+        "help": "Post body text, or a path to a .txt file (auto-read)"
+      },
+      {
+        "name": "file",
+        "type": "string",
+        "required": false,
+        "help": "Path to a .txt file whose content becomes the post body"
+      },
+      {
+        "name": "videos",
+        "type": "string",
+        "required": true,
+        "help": "Local video path (mp4/mov/avi/mkv/webm/m4v)"
+      },
+      {
+        "name": "dry-run",
+        "type": "bool",
+        "default": false,
+        "required": false,
+        "help": "Fill everything, skip the final submit"
+      },
+      {
+        "name": "timeout",
+        "type": "int",
+        "default": 300,
+        "required": false,
+        "help": "Max seconds for the publish command (default: 300)"
+      }
+    ],
+    "columns": [
+      "status",
+      "url",
+      "post_id"
+    ],
+    "type": "js",
+    "modulePath": "tiktok/publish.js",
+    "sourceFile": "tiktok/publish.js",
+    "navigateBefore": true,
+    "siteSession": "persistent",
+    "defaultWindowMode": "foreground"
+  },
+  {
+    "site": "tiktok",
     "name": "save",
     "description": "Add a TikTok video to Favorites",
     "access": "write",
@@ -41623,6 +41849,61 @@
     "modulePath": "twitter/profile.js",
     "sourceFile": "twitter/profile.js",
     "navigateBefore": "https://x.com"
+  },
+  {
+    "site": "twitter",
+    "name": "publish",
+    "description": "Publish a text/image post to X (Twitter)",
+    "access": "write",
+    "domain": "x.com",
+    "strategy": "ui",
+    "browser": true,
+    "args": [
+      {
+        "name": "text",
+        "type": "str",
+        "required": false,
+        "positional": true,
+        "help": "Post body text, or a path to a .txt file (auto-read)"
+      },
+      {
+        "name": "file",
+        "type": "string",
+        "required": false,
+        "help": "Path to a .txt file whose content becomes the post body"
+      },
+      {
+        "name": "images",
+        "type": "string",
+        "required": false,
+        "help": "Comma-separated local image paths (jpg/png/gif/webp/bmp)"
+      },
+      {
+        "name": "dry-run",
+        "type": "bool",
+        "default": false,
+        "required": false,
+        "help": "Fill everything, skip the final submit"
+      },
+      {
+        "name": "timeout",
+        "type": "int",
+        "default": 180,
+        "required": false,
+        "help": "Max seconds for the publish command (default: 180)"
+      }
+    ],
+    "columns": [
+      "status",
+      "url",
+      "post_id"
+    ],
+    "type": "js",
+    "modulePath": "twitter/publish.js",
+    "sourceFile": "twitter/publish.js",
+    "navigateBefore": true,
+    "siteSession": "persistent",
+    "defaultWindowMode": "foreground"
   },
   {
     "site": "twitter",
@@ -48029,6 +48310,61 @@
     "modulePath": "youtube/playlist.js",
     "sourceFile": "youtube/playlist.js",
     "navigateBefore": "https://www.youtube.com"
+  },
+  {
+    "site": "youtube",
+    "name": "publish",
+    "description": "Upload a video with a title/description to YouTube",
+    "access": "write",
+    "domain": "www.youtube.com",
+    "strategy": "ui",
+    "browser": true,
+    "args": [
+      {
+        "name": "text",
+        "type": "str",
+        "required": false,
+        "positional": true,
+        "help": "Post body text, or a path to a .txt file (auto-read)"
+      },
+      {
+        "name": "file",
+        "type": "string",
+        "required": false,
+        "help": "Path to a .txt file whose content becomes the post body"
+      },
+      {
+        "name": "videos",
+        "type": "string",
+        "required": true,
+        "help": "Local video path (mp4/mov/avi/mkv/webm/m4v)"
+      },
+      {
+        "name": "dry-run",
+        "type": "bool",
+        "default": false,
+        "required": false,
+        "help": "Fill everything, skip the final submit"
+      },
+      {
+        "name": "timeout",
+        "type": "int",
+        "default": 300,
+        "required": false,
+        "help": "Max seconds for the publish command (default: 300)"
+      }
+    ],
+    "columns": [
+      "status",
+      "url",
+      "post_id"
+    ],
+    "type": "js",
+    "modulePath": "youtube/publish.js",
+    "sourceFile": "youtube/publish.js",
+    "navigateBefore": true,
+    "siteSession": "persistent",
+    "defaultWindowMode": "foreground"
   },
   {
     "site": "youtube",
