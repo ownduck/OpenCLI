@@ -5,7 +5,6 @@ import {
   COLUMNS,
   PHASE,
   resolveContent,
-  classifyMedia,
   normalizeMediaFiles,
   requireLogin,
   buildArgs,
@@ -133,7 +132,6 @@ cli({
 
 export const __test__ = {
   resolveContent,
-  classifyMedia,
   normalizeMediaFiles,
   X,
 };

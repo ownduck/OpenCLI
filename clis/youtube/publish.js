@@ -5,9 +5,7 @@ import {
   COLUMNS,
   PHASE,
   resolveContent,
-  classifyMedia,
   normalizeMediaFiles,
-  requireSingleVideo,
   requireLogin,
   buildArgs,
   row,
@@ -18,9 +16,8 @@ import {
   fillEditor,
   attachMedia,
   publishFinish,
-  locateAllJs,
-  locatePredicateJs,
-  clickJs,
+  locateJs,
+  clickXpath,
   clickWhenReady,
   dismissOverlays,
   resultProbeJs,
@@ -56,6 +53,11 @@ const X = {
     '//*[@id="done-button"]',
     '//ytcp-uploads-dialog//ytcp-button[@id="done-button"]',
   ],
+  closeBtn: [
+    '//ytcp-uploads-still-processing-dialog//*[@id="close-button"]',
+    '//tp-yt-paper-dialog//*[@id="close-button"]',
+    '//tp-yt-paper-dialog//*[@id="close-icon-button"]',
+  ],
   kidsNo: [
     '//ytkc-made-for-kids-select//tp-yt-paper-radio-button[2]',
   ],
@@ -65,6 +67,29 @@ const X = {
 };
 
 const DIALOG_PROBE = `(() => ({ ok: !!document.querySelector('ytcp-uploads-dialog') }))()`;
+const POST_DIALOG_PROBE = `(() => {
+  for (const x of ${JSON.stringify(X.closeBtn)}) {
+    const el = document.evaluate(x, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+    if (!(el instanceof Element)) continue;
+    const r = el.getBoundingClientRect();
+    if (r.width > 0 && r.height > 0) return { ok: true };
+  }
+  return { ok: false };
+})()`;
+
+async function closePostPublishDialogs(bp, rounds = 3) {
+  for (let i = 1; i <= rounds; i++) {
+    try {
+      await waitFor(bp, POST_DIALOG_PROBE, 10000, '发布后弹窗', SITE_HINT);
+    } catch {
+      log.verbose('未出现发布后弹窗（或已全部关闭），无需处理');
+      return;
+    }
+    await clickWhenReady(bp, X.closeBtn, 15000, '关闭按钮', SITE_HINT);
+    log.status(`· 已关闭发布后弹窗（第 ${i} 个）`);
+    await humanWait(bp, 1.2, 2.4);
+  }
+}
 
 async function openUploadDialog(bp) {
   await clickWhenReady(bp, X.entry, 30000, '上传入口', SITE_HINT);
@@ -79,7 +104,7 @@ async function openUploadDialog(bp) {
 }
 
 async function applySettings(bp) {
-  const kids = await bp.evaluate(clickJs(X.kidsNo));
+  const kids = await clickXpath(bp, X.kidsNo);
   log.status(kids?.ok ? '· 已设置"非儿童内容"' : '· 未找到儿童内容选项，跳过');
   for (let i = 1; i <= 3; i++) {
     if ((await bp.evaluate(DIALOG_PROBE)) && (await bp.evaluate(`(() => ({ ok: !!document.querySelector('ytcp-video-visibility-select') }))()`))?.ok) break;
@@ -89,7 +114,7 @@ async function applySettings(bp) {
       await humanWait(bp, 1.5, 3);
     } catch { break; }
   }
-  const pub = await bp.evaluate(clickJs(X.visibilityPublic));
+  const pub = await clickXpath(bp, X.visibilityPublic);
   log.status(pub?.ok ? '· 已设置公开范围：公开' : '· 未找到公开范围选项，跳过');
 }
 
@@ -111,8 +136,8 @@ cli({
     await requireLogin(bp, 'https://www.youtube.com', ['SID', 'SAPISID', '__Secure-1PSID'], 'www.youtube.com');
     log.status('已登录，开始整理发布内容');
     const content = resolveContent({ text: kwargs.text, file: kwargs.file });
-    const { videos } = normalizeMediaFiles({ videos: kwargs.videos });
-    const video = requireSingleVideo(videos, 'youtube');
+    const { videos } = normalizeMediaFiles({ videos: kwargs.videos, maxVideos: 1, site: 'youtube' });
+    const video = videos[0];
     const timeout = Number(kwargs.timeout) || 300;
     const dryRun = Boolean(kwargs['dry-run'] ?? kwargs.dryRun);
     log.status(`内容 ${content.length} 字，视频 1 个${dryRun ? '（dry-run）' : ''}`);
@@ -126,14 +151,14 @@ cli({
       files: [video],
       fileInputXpaths: X.fileInput,
       acceptHint: 'video',
-      readyProbeJs: locatePredicateJs(X.editor),
+      readyProbeJs: locateJs(X.editor, { mode: 'exists' }),
       readyTimeoutMs: 60000,
       label: '视频',
       hint: SITE_HINT,
     }), 2.4, 4.8);
     log.status('已选择视频文件，等待上传初始化');
 
-    const boxes = await step(bp, PHASE.editor, () => waitFor(bp, locateAllJs(X.editor, 'data-opencli-yt-box'), 60000, '标题/描述输入框', SITE_HINT), 1.5, 3);
+    const boxes = await step(bp, PHASE.editor, () => waitFor(bp, locateJs(X.editor, { mode: 'all', attrPrefix: 'data-opencli-yt-box' }), 60000, '标题/描述输入框', SITE_HINT), 1.5, 3);
     log.status(`已定位输入框（${boxes.count} 个）`);
 
     if (content) {
@@ -149,7 +174,7 @@ cli({
       return row('dry_run');
     }
     await step(bp, PHASE.publish, () => clickWhenReady(bp, X.publishBtn, 120000, '发布按钮', SITE_HINT), 1.5, 3);
-    return publishFinish(bp, {
+    const out = await publishFinish(bp, {
       probeJs: resultProbeJs({
         goneSelector: 'ytcp-uploads-dialog',
         urlPattern: 'watch\\?v=',
@@ -159,13 +184,13 @@ cli({
       hint: SITE_HINT,
       idPattern: ID_PATTERN,
     });
+    await step(bp, '· 关闭发布后弹窗', () => closePostPublishDialogs(bp), 1.2, 2.4);
+    return out;
   },
 });
 
 export const __test__ = {
   resolveContent,
-  classifyMedia,
   normalizeMediaFiles,
-  requireSingleVideo,
   X,
 };

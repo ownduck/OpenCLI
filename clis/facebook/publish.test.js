@@ -53,19 +53,6 @@ describe('resolveContent', () => {
   });
 });
 
-describe('classifyMedia', () => {
-  it('classifies images and videos', () => {
-    expect(__test__.classifyMedia('a.png')).toBe('image');
-    expect(__test__.classifyMedia('b.JPG')).toBe('image');
-    expect(__test__.classifyMedia('c.mp4')).toBe('video');
-    expect(__test__.classifyMedia('d.mov')).toBe('video');
-  });
-
-  it('returns unsupported for unknown extensions', () => {
-    expect(__test__.classifyMedia('e.pdf')).toBe('unsupported');
-  });
-});
-
 describe('normalizeMediaFiles', () => {
   it('throws when a media file is missing', () => {
     expect(() => __test__.normalizeMediaFiles({ images: '/no/such.png' })).toThrow(ArgumentError);

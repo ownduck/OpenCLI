@@ -60,17 +60,6 @@ describe('resolveContent', () => {
   });
 });
 
-describe('classifyMedia', () => {
-  it('classifies videos', () => {
-    expect(__test__.classifyMedia('c.mp4')).toBe('video');
-    expect(__test__.classifyMedia('d.mov')).toBe('video');
-  });
-
-  it('returns unsupported for unknown extensions', () => {
-    expect(__test__.classifyMedia('e.pdf')).toBe('unsupported');
-  });
-});
-
 describe('normalizeMediaFiles', () => {
   it('throws when a video file is missing', () => {
     expect(() => __test__.normalizeMediaFiles({ videos: '/no/such.mp4' })).toThrow(ArgumentError);

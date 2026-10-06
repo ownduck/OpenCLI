@@ -5,9 +5,7 @@ import {
   COLUMNS,
   PHASE,
   resolveContent,
-  classifyMedia,
   normalizeMediaFiles,
-  requireSingleVideo,
   requireLogin,
   buildArgs,
   row,
@@ -18,7 +16,7 @@ import {
   attachMedia,
   publishFinish,
   locateJs,
-  waitForElement,
+  waitFor,
   clickXpath,
   clickWhenReady,
   confirmDialog,
@@ -116,8 +114,8 @@ cli({
     await requireLogin(bp, 'https://www.tiktok.com', ['sessionid', 'sessionid_ss', 'sid_tt'], 'www.tiktok.com');
     log.status('已登录，开始整理发布内容');
     const content = resolveContent({ text: kwargs.text, file: kwargs.file });
-    const { videos } = normalizeMediaFiles({ videos: kwargs.videos });
-    const video = requireSingleVideo(videos, 'tiktok');
+    const { videos } = normalizeMediaFiles({ videos: kwargs.videos, maxVideos: 1, site: 'tiktok' });
+    const video = videos[0];
     const timeout = Number(kwargs.timeout) || 300;
     const waitMs = Math.max(60000, Math.round(timeout * 1000 * 0.4));
     const dryRun = Boolean(kwargs['dry-run'] ?? kwargs.dryRun);
@@ -125,7 +123,7 @@ cli({
 
     await step(bp, PHASE.open, () => gotoWithRetry(bp, ENTRY_URL), 2.4, 4.8);
     await step(bp, PHASE.overlay, () => dismissOverlays(bp, 3), 0.8, 1.6);
-    await step(bp, PHASE.entry, () => waitForElement(bp, X.panel, 60000, '上传面板', SITE_HINT), 1.5, 3);
+    await step(bp, PHASE.entry, () => waitFor(bp, locateJs(X.panel, { mode: 'exists' }), 60000, '上传面板', SITE_HINT), 1.5, 3);
 
     log.verbose('该站需先上传媒体才会出现文案框，故媒体步骤先于编辑框步骤');
     const attached = await step(bp, PHASE.media, () => attachMedia(bp, {
@@ -143,7 +141,7 @@ cli({
     log.status(`视频已提交（方式：${attached.via === 'paste' ? '粘贴' : '文件输入'}），等待服务端处理`);
 
     const editor = await step(bp, PHASE.editor, async () => {
-      await waitForElement(bp, X.editor, waitMs, '文案框', SITE_HINT);
+      await waitFor(bp, locateJs(X.editor, { mode: 'exists' }), waitMs, '文案框', SITE_HINT);
       const marked = await bp.evaluate(locateJs(X.editor, 'data-opencli-tt-editor'));
       if (!marked?.ok) throw new CommandExecutionError('TikTok caption box not found', SITE_HINT);
       return marked;
@@ -175,8 +173,6 @@ cli({
 
 export const __test__ = {
   resolveContent,
-  classifyMedia,
   normalizeMediaFiles,
-  requireSingleVideo,
   X,
 };

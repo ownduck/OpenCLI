@@ -5,7 +5,6 @@ import {
   COLUMNS,
   PHASE,
   resolveContent,
-  classifyMedia,
   normalizeMediaFiles,
   requireLogin,
   buildArgs,
@@ -26,10 +25,33 @@ import {
 } from '../shared/publish-helpers.js';
 
 const ENTRY_URL = 'https://www.facebook.com/';
+const PROFILE_URL = 'https://www.facebook.com/me/';
 const MAX_MEDIA = 10;
 const ACTION_ATTR = 'data-opencli-fb-action';
 const ID_PATTERN = /\/posts\/([^/?#]+)/;
 const SITE_HINT = 'Facebook UI may have changed — re-check the composer semantic selectors';
+const OWN_POST_PROBE = `(() => {
+  const links = [...document.querySelectorAll('a[href]')].map(a => a.getAttribute('href') || '');
+  const hit = links.find(h => /\\/posts\\/|story\\.php\\?story_fbid=|permalink\\.php\\?story_fbid=/.test(h));
+  if (!hit) return { ok: false };
+  return { ok: true, url: /^https?:/i.test(hit) ? hit : 'https://www.facebook.com' + hit };
+})()`;
+
+async function capturePostUrl(bp) {
+  try {
+    await waitFor(bp, OWN_POST_PROBE, 45000, '帖子链接', SITE_HINT);
+  } catch {
+    log.verbose('主页未找到新帖链接，保留空 url');
+    return;
+  }
+  const found = await bp.evaluate(OWN_POST_PROBE);
+  if (!found?.url) return;
+  let url = found.url;
+  const m = url.match(ID_PATTERN) || url.match(/story_fbid=([^&#]+)/);
+  const postId = m ? (m[1] || '') : '';
+  if (/\/posts\//.test(url)) url = url.split('?')[0];
+  return { url, postId };
+}
 
 const X = {
   entry: [
@@ -103,30 +125,39 @@ cli({
       log.status(`已附加 ${media.length} 个媒体文件`);
     }
 
-    if (content) await step(bp, PHASE.text, () => fillEditor(bp, editor.selector, content), 1.5, 3);
+    if (content) await step(bp, PHASE.text, () => fillEditor(bp, editor.selector, content, locateJs(X.editor, 'data-opencli-fb-editor')), 1.5, 3);
     await step(bp, PHASE.settings, async () => { log.verbose('Facebook 无发布前设置，跳过'); }, 0.2, 0.4);
     if (dryRun) {
       log.status('dry-run 完成，跳过发布按钮');
       return row('dry_run');
     }
     await step(bp, PHASE.publish, () => clickPublish(bp), 1.5, 3);
-    return publishFinish(bp, {
+    const out = await publishFinish(bp, {
       probeJs: resultProbeJs({
         goneSelector: '[role="dialog"]',
         urlPattern: 'permalink\\.php|/posts/|story_fbid',
         texts: ['已发布', '已分享', 'your post', '发布成功'],
       }),
-      timeoutMs: timeout * 1000,
+      timeoutMs: Math.min(timeout * 1000, 90000),
       hint: SITE_HINT,
       idPattern: ID_PATTERN,
       stripQuery: true,
     });
+    if (!out[0]?.url) {
+      await step(bp, '· 跳转主页捕获帖子链接', () => gotoWithRetry(bp, PROFILE_URL), 2.4, 4.8);
+      const found = await capturePostUrl(bp);
+      if (found) {
+        out[0].url = found.url;
+        out[0].post_id = found.postId;
+        log.status(`已捕获帖子链接：${found.url}`);
+      }
+    }
+    return out;
   },
 });
 
 export const __test__ = {
   resolveContent,
-  classifyMedia,
   normalizeMediaFiles,
   X,
 };

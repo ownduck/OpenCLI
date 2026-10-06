@@ -5,13 +5,12 @@ import {
   COLUMNS,
   PHASE,
   resolveContent,
-  classifyMedia,
   normalizeMediaFiles,
   requireLogin,
   buildArgs,
   row,
   step,
-  humanWaitLoaded,
+  humanWait,
   waitFor,
   gotoWithRetry,
   fillEditor,
@@ -86,11 +85,24 @@ async function advanceToCaption(bp) {
     try { ok = await clickHeaderAction(bp); } catch { ok = false; }
     if (!ok) break;
     log.status(`· 已点击继续（第 ${i} 步）`);
-    await humanWaitLoaded(bp);
+    await humanWait(bp, 5.3, 6.8);
     editor = await bp.evaluate(locateJs(X.editor, 'data-opencli-ig-editor'));
   }
   if (!editor?.ok) editor = await waitFor(bp, locateJs(X.editor, 'data-opencli-ig-editor'), 45000, '文案框', SITE_HINT);
   return editor;
+}
+
+async function closeSharedDialog(bp) {
+  const attr = `${ACTION_ATTR}-done`;
+  try {
+    const marked = await waitFor(bp, headerActionJs(attr), 12000, '发布成功弹窗', SITE_HINT);
+    const clicked = await clickXpath(bp, [`//*[@${attr}="1"]`]);
+    log.verbose(`已关闭发布成功弹窗：<${marked.tag}> "${marked.label}"`);
+    return Boolean(clicked?.ok);
+  } catch {
+    log.verbose('未出现发布成功弹窗（或已自动关闭），无需处理');
+    return false;
+  }
 }
 
 cli({
@@ -147,7 +159,7 @@ cli({
       return row('dry_run');
     }
     await step(bp, PHASE.publish, () => clickHeaderAction(bp), 1.5, 3);
-    return publishFinish(bp, {
+    const out = await publishFinish(bp, {
       probeJs: resultProbeJs({
         goneSelector: '[role="dialog"]',
         urlPattern: '/p/',
@@ -159,12 +171,13 @@ cli({
       idPattern: ID_PATTERN,
       retry: () => clickHeaderAction(bp),
     });
+    await step(bp, '· 关闭发布成功弹窗', () => closeSharedDialog(bp), 1.2, 2.4);
+    return out;
   },
 });
 
 export const __test__ = {
   resolveContent,
-  classifyMedia,
   normalizeMediaFiles,
   X,
 };

@@ -46,8 +46,37 @@ const IN_PAGE_HELPERS = `${isVisibleFn()}
     return requireVisible ? fallback : null;
   };`;
 
-// 生成页面脚本：按顺序试 xpath，命中可见元素后打标记属性，返回 { ok, selector }；selector 可直接交给 clickXpath
-export function locateJs(xpaths, attr) {
+// 生成页面定位脚本。第二参可为标记 attr 字符串（mode=one），或 { mode, attr, attrPrefix, skipDisabled }：
+//   one（默认）— 打标记，返回 { ok, selector }
+//   all — 逐一打标记，返回 { ok, count, selectors }（如 YouTube 标题/描述框）
+//   exists — 只判存在，配合 waitFor（不打标记）
+export function locateJs(xpaths, attrOrOpts = 'data-opencli-locate') {
+  const opts = typeof attrOrOpts === 'string'
+    ? { mode: 'one', attr: attrOrOpts }
+    : (attrOrOpts || {});
+  const mode = opts.mode || 'one';
+  const skipDisabled = opts.skipDisabled !== false;
+  if (mode === 'exists') {
+    return `(() => {
+      ${IN_PAGE_HELPERS}
+      const el = byXpaths(${JSON.stringify(xpaths)}, document, ${skipDisabled}, true);
+      return { ok: !!(el instanceof Element) };
+    })()`;
+  }
+  if (mode === 'all') {
+    const attrPrefix = opts.attrPrefix || opts.attr || 'data-opencli-locate';
+    return `(() => {
+      ${IN_PAGE_HELPERS}
+      let nodes = [];
+      for (const x of ${JSON.stringify(xpaths)}) { nodes = allByXpath(x); if (nodes.length) break; }
+      const els = nodes.filter(el => el instanceof HTMLElement);
+      if (!els.length) return { ok: false };
+      const selectors = [];
+      els.forEach((el, i) => { const a = ${JSON.stringify(attrPrefix)} + '-' + i; el.setAttribute(a, '1'); selectors.push('[' + a + '="1"]'); });
+      return { ok: true, count: els.length, selectors };
+    })()`;
+  }
+  const attr = opts.attr || 'data-opencli-locate';
   return `(() => {
     ${IN_PAGE_HELPERS}
     const el = byXpaths(${JSON.stringify(xpaths)}, document, false, true);
@@ -57,31 +86,8 @@ export function locateJs(xpaths, attr) {
   })()`;
 }
 
-// 生成页面脚本：命中一组同类元素并逐一打标记（attr-0/1/2...），用于批量点击（如 YouTube 的单选项组）
-export function locateAllJs(xpaths, attrPrefix) {
-  return `(() => {
-    ${IN_PAGE_HELPERS}
-    let nodes = [];
-    for (const x of ${JSON.stringify(xpaths)}) { nodes = allByXpath(x); if (nodes.length) break; }
-    const els = nodes.filter(el => el instanceof HTMLElement);
-    if (!els.length) return { ok: false };
-    const selectors = [];
-    els.forEach((el, i) => { const a = ${JSON.stringify(attrPrefix)} + '-' + i; el.setAttribute(a, '1'); selectors.push('[' + a + '="1"]'); });
-    return { ok: true, count: els.length, selectors };
-  })()`;
-}
-
-// 生成页面脚本：只判断元素是否存在（不点击），通常配合 waitFor 做「等待出现」
-export function locatePredicateJs(xpaths, skipDisabled = true) {
-  return `(() => {
-    ${IN_PAGE_HELPERS}
-    const el = byXpaths(${JSON.stringify(xpaths)}, document, ${skipDisabled}, true);
-    return { ok: !!(el instanceof Element) };
-  })()`;
-}
-
-// 生成页面脚本：在页面内直接 el.click()；React 受控的原生 button/a 只认这种方式（CDP 鼠标实测被忽略）
-export function clickJs(xpaths, skipDisabled = true) {
+// 页面内 DOM click（仅供 clickXpath 内部回退；对外统一用 clickXpath）
+function clickJs(xpaths, skipDisabled = true) {
   return `(() => {
     ${IN_PAGE_HELPERS}
     const el = byXpaths(${JSON.stringify(xpaths)}, document, ${skipDisabled}, true);
@@ -149,18 +155,14 @@ export async function clickXpath(page, xpaths, opts = {}) {
   return { ok: true, via: 'dom' };
 }
 
-// 拟人随机等待：在 [min, max] 间取随机秒数（max 缺省为 min*2），避免机械节奏被反爬识别
+// 拟人随机等待：在 [min, max] 间取随机秒数（max 缺省为 min*2），避免机械节奏被反爬识别。
+// 页面跳转/大步骤后的较长等待传 (page, 5.3, 6.8)
 export async function humanWait(page, minSeconds = 2.4, maxSeconds = null) {
   const min = Number(minSeconds) || 2.4;
   const max = Number(maxSeconds) || min * 2;
   const seconds = (Math.floor(Math.random() * (max * 1000 - min * 1000 + 1)) + min * 1000) / 1000;
   await page.wait({ time: seconds });
   return seconds;
-}
-
-// 页面跳转或大步骤之后的较长等待（5.3~6.8s）
-export async function humanWaitLoaded(page) {
-  return humanWait(page, 5.3, 6.8);
 }
 
 // 步骤包装：打印步骤日志 → 执行 → 拟人等待。六站所有步骤都走它，保证日志编号与节奏一致
@@ -211,14 +213,9 @@ export async function waitFor(page, predicateExpr, timeoutMs, label, hint) {
   throw new CommandExecutionError(`publish step timed out: ${label}`, hint || 'The site DOM may have changed — re-run to re-discover selectors');
 }
 
-// waitFor 的便捷版：直接传 xpath 列表，等待其中任一元素出现
-export async function waitForElement(page, xpaths, timeoutMs, label, hint) {
-  return waitFor(page, locatePredicateJs(xpaths), timeoutMs, label, hint);
-}
-
-// 等到元素出现再点击（waitForElement + clickXpath），点击落空会抛错而非静默返回
+// 等到元素出现再点击，点击落空会抛错而非静默返回
 export async function clickWhenReady(page, xpaths, timeoutMs, label, hint, opts) {
-  await waitForElement(page, xpaths, timeoutMs, label, hint);
+  await waitFor(page, locateJs(xpaths, { mode: 'exists' }), timeoutMs, label, hint);
   const r = await clickXpath(page, xpaths, opts);
   if (!r?.ok) throw new CommandExecutionError(`click failed: ${label}`, hint || 'The element became unclickable');
   return r;
@@ -232,7 +229,7 @@ export async function gotoWithRetry(page, url) {
   const tick = async () => {
     if (stopped) return;
     try { await page.handleJavaScriptDialog?.(true); } catch {}
-    if (!stopped) setTimeout(tick, 400);
+    if (!stopped) setTimeout(tick, 150);
   };
   tick();
   const attempts = [
@@ -398,13 +395,24 @@ export async function attachMedia(page, {
 }
 
 // 填正文：优先 fillText（带回填校验）→ 退化为 CDP insertText → 再退化为写 textContent + 派发 input 事件
-export async function fillEditor(page, selector, content) {
-  const filled = await page.fillText(selector, content);
+export async function fillEditor(page, selector, content, relocateJs = null) {
+  let sel = selector;
+  if (relocateJs) {
+    const alive = await page.evaluate(`(() => ({ ok: document.querySelector(${JSON.stringify(selector)}) instanceof HTMLElement }))()`);
+    if (!alive?.ok) {
+      const fresh = await page.evaluate(relocateJs);
+      if (fresh?.ok) {
+        sel = fresh.selector;
+        log.verbose(`编辑器标记已失效（节点被重建），重新定位：${sel}`);
+      }
+    }
+  }
+  const filled = await page.fillText(sel, content);
   if (filled?.filled && filled?.verified) {
     log.verbose('正文经 fillText 校验通过');
     return;
   }
-  await page.evaluate(`(() => { const e = document.querySelector(${JSON.stringify(selector)}); if (e instanceof HTMLElement) e.focus(); })()`);
+  await page.evaluate(`(() => { const e = document.querySelector(${JSON.stringify(sel)}); if (e instanceof HTMLElement) e.focus(); })()`);
   if (page.insertText) {
     await page.insertText(content);
     await page.wait({ time: 0.3 });
@@ -412,7 +420,7 @@ export async function fillEditor(page, selector, content) {
     return;
   }
   const ok = await page.evaluate(`((text) => {
-    const e = document.querySelector(${JSON.stringify(selector)});
+    const e = document.querySelector(${JSON.stringify(sel)});
     if (!(e instanceof HTMLElement)) return { ok: false };
     e.focus();
     e.textContent = text;
@@ -694,16 +702,17 @@ export function resolveContent({ text, file }) {
   return '';
 }
 
-// 按扩展名判定媒体类型：image / video / unsupported
-export function classifyMedia(filePath) {
+// 按扩展名判定媒体类型：image / video / unsupported（仅供 normalizeMediaFiles）
+function classifyMedia(filePath) {
   const ext = path.extname(filePath).toLowerCase();
   if (IMAGE_EXT.has(ext)) return 'image';
   if (VIDEO_EXT.has(ext)) return 'video';
   return 'unsupported';
 }
 
-// 校验并归一化 --images/--videos：路径存在、格式受支持、类型与参数对应（图不能塞进 --videos）
-export function normalizeMediaFiles({ images = '', videos = '' } = {}) {
+// 校验并归一化 --images/--videos：路径存在、格式受支持、类型与参数对应（图不能塞进 --videos）。
+// maxVideos=1 时强制恰好一个视频（TikTok / YouTube），site 用于错误文案
+export function normalizeMediaFiles({ images = '', videos = '', maxVideos = null, site = '' } = {}) {
   const one = (raw, kind) => raw.split(',').map(s => s.trim()).filter(Boolean).map(p => {
     const abs = path.resolve(p);
     if (!fs.existsSync(abs) || !fs.statSync(abs).isFile())
@@ -715,17 +724,15 @@ export function normalizeMediaFiles({ images = '', videos = '' } = {}) {
       throw new ArgumentError(`Expected ${kind} but got ${cls}: ${abs}`, 'Use --images for images and --videos for videos');
     return abs;
   });
-  return { images: one(String(images ?? ''), 'image'), videos: one(String(videos ?? ''), 'video') };
-}
-
-// 视频站专用校验：必须有且只有一个视频
-export function requireSingleVideo(videos, site) {
-  const list = videos || [];
-  if (list.length === 0)
-    throw new ArgumentError(`${site} publish requires a video`, 'Pass --videos <path> (mp4/mov/avi/mkv/webm/m4v)');
-  if (list.length > 1)
-    throw new ArgumentError(`${site} publish accepts one video, got ${list.length}`, 'Pass a single --videos path');
-  return list[0];
+  const out = { images: one(String(images ?? ''), 'image'), videos: one(String(videos ?? ''), 'video') };
+  if (maxVideos != null) {
+    const label = site || 'publish';
+    if (out.videos.length === 0)
+      throw new ArgumentError(`${label} publish requires a video`, 'Pass --videos <path> (mp4/mov/avi/mkv/webm/m4v)');
+    if (out.videos.length > maxVideos)
+      throw new ArgumentError(`${label} publish accepts one video, got ${out.videos.length}`, 'Pass a single --videos path');
+  }
+  return out;
 }
 
 // 发布前置检查：cookie 中存在任一有效会话凭证才继续，否则抛 AuthRequiredError 提示先登录
@@ -778,10 +785,10 @@ export async function publishFinish(page, {
   let last = await waitResult(page, probeJs, firstMs ?? timeoutMs, PHASE.result, hint);
   if (!last?.ok && retry) {
     try { await retry(); } catch (e) { log.verbose(`发布重试未生效（${e?.message || e}）`); }
-    await humanWaitLoaded(page);
+    await humanWait(page, 5.3, 6.8);
     last = await waitResult(page, probeJs, timeoutMs, PHASE.result, hint);
   }
-  await humanWaitLoaded(page);
+  await humanWait(page, 5.3, 6.8);
   let url = last?.url || '';
   if (stripQuery) url = url.split('?')[0];
   const postId = idPattern ? ((url.match(idPattern) || [])[1] || '') : '';

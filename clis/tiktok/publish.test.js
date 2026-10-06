@@ -51,17 +51,6 @@ describe('resolveContent', () => {
   });
 });
 
-describe('classifyMedia', () => {
-  it('classifies videos', () => {
-    expect(__test__.classifyMedia('c.mp4')).toBe('video');
-    expect(__test__.classifyMedia('d.mov')).toBe('video');
-  });
-
-  it('returns unsupported for unknown extensions', () => {
-    expect(__test__.classifyMedia('e.pdf')).toBe('unsupported');
-  });
-});
-
 describe('normalizeMediaFiles', () => {
   it('throws when a video file is missing', () => {
     expect(() => __test__.normalizeMediaFiles({ videos: '/no/such.mp4' })).toThrow(ArgumentError);
@@ -88,24 +77,32 @@ describe('normalizeMediaFiles', () => {
       fs.unlinkSync(vid);
     }
   });
-});
 
-describe('requireSingleVideo', () => {
-  it('accepts exactly one video', () => {
+  it('accepts exactly one video when maxVideos is 1', () => {
     const vid = path.join(os.tmpdir(), `tt-one-${Date.now()}.mp4`);
     fs.writeFileSync(vid, 'x');
     try {
-      expect(__test__.requireSingleVideo([vid], 'tiktok')).toBe(vid);
+      const r = __test__.normalizeMediaFiles({ videos: vid, maxVideos: 1, site: 'tiktok' });
+      expect(r.videos).toEqual([vid]);
     } finally {
       fs.unlinkSync(vid);
     }
   });
 
-  it('rejects an empty list', () => {
-    expect(() => __test__.requireSingleVideo([], 'tiktok')).toThrow(ArgumentError);
+  it('rejects an empty list when maxVideos is 1', () => {
+    expect(() => __test__.normalizeMediaFiles({ videos: '', maxVideos: 1, site: 'tiktok' })).toThrow(ArgumentError);
   });
 
-  it('rejects more than one video', () => {
-    expect(() => __test__.requireSingleVideo(['a.mp4', 'b.mp4'], 'tiktok')).toThrow(ArgumentError);
+  it('rejects more than one video when maxVideos is 1', () => {
+    const a = path.join(os.tmpdir(), `tt-a-${Date.now()}.mp4`);
+    const b = path.join(os.tmpdir(), `tt-b-${Date.now()}.mp4`);
+    fs.writeFileSync(a, 'x');
+    fs.writeFileSync(b, 'x');
+    try {
+      expect(() => __test__.normalizeMediaFiles({ videos: `${a},${b}`, maxVideos: 1, site: 'tiktok' })).toThrow(ArgumentError);
+    } finally {
+      fs.unlinkSync(a);
+      fs.unlinkSync(b);
+    }
   });
 });

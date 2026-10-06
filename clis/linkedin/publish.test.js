@@ -55,17 +55,6 @@ describe('resolveContent', () => {
   });
 });
 
-describe('classifyMedia', () => {
-  it('classifies images', () => {
-    expect(__test__.classifyMedia('a.png')).toBe('image');
-    expect(__test__.classifyMedia('b.JPG')).toBe('image');
-  });
-
-  it('returns unsupported for unknown extensions', () => {
-    expect(__test__.classifyMedia('e.pdf')).toBe('unsupported');
-  });
-});
-
 describe('normalizeMediaFiles', () => {
   it('throws when an image file is missing', () => {
     expect(() => __test__.normalizeMediaFiles({ images: '/no/such.png' })).toThrow(ArgumentError);
