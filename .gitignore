@@ -29,3 +29,4 @@ autoresearch-results.tsv
 package-lock.json
 pnpm-lock.yaml
 .idea
+.workbuddy

@@ -16,26 +16,25 @@ async function verifyInstagramIdentity(page) {
     try {
       const uid = (document.cookie.split('; ').find(c => c.startsWith('ds_user_id=')) || '').split('=')[1] || '';
       if (!uid) return { kind: 'auth', detail: 'Instagram ds_user_id cookie missing' };
-      const r = await fetch('/api/v1/users/' + uid + '/info/', {
-        credentials: 'include',
-        headers: { 'X-IG-App-ID': '936619743392459', 'Accept': 'application/json' },
-      });
-      if (r.status === 401 || r.status === 403) {
-        return { kind: 'auth', detail: 'Instagram /users/info HTTP ' + r.status };
-      }
-      if (!r.ok) return { kind: 'http', httpStatus: r.status };
-      const d = await r.json();
-      const user = d?.user;
-      if (!user || !user.pk) {
-        return { kind: 'auth', detail: 'Instagram /users/info returned no pk — session likely expired' };
-      }
-      return { ok: true, user_id: String(user.pk), username: String(user.username || ''), full_name: String(user.full_name || '') };
+      const link = [...document.querySelectorAll('a')].find(el => /^\\/[^\\/?#]+\\/?$/.test(el.getAttribute('href') || '') && el.querySelector('img'));
+      const username = (link && (link.getAttribute('href').match(/^\\/([^\\/?#]+)/) || [])[1]) || '';
+      if (!username) return { kind: 'dom', detail: 'Instagram profile link not found in DOM' };
+      let full_name = '';
+      try {
+        const r = await fetch('/' + username + '/?__a=1&__d=dis', { credentials: 'include', headers: { 'X-IG-App-ID': '936619743392459', 'Accept': 'application/json' } });
+        if (r.ok) {
+          const u = (await r.json())?.graphql?.user;
+          if (u?.username) return { ok: true, user_id: uid, username: String(u.username), full_name: String(u.full_name || '') };
+          if (u?.full_name) full_name = String(u.full_name);
+        }
+      } catch (_) {}
+      return { ok: true, user_id: uid, username, full_name };
     } catch (e) {
       return { kind: 'exception', detail: String(e && e.message || e) };
     }
   })()`);
   if (result?.kind === 'auth') throw new AuthRequiredError('www.instagram.com', result.detail);
-  if (result?.kind === 'http') throw new CommandExecutionError(`HTTP ${result.httpStatus} from Instagram /users/info`);
+  if (result?.kind === 'dom') throw new CommandExecutionError(`Instagram profile link not found: ${result.detail}`);
   if (result?.kind === 'exception') throw new CommandExecutionError(`Instagram whoami failed: ${result.detail}`);
   if (!result?.ok) throw new CommandExecutionError(`Unexpected Instagram probe: ${JSON.stringify(result)}`);
   return { user_id: result.user_id, username: result.username, full_name: result.full_name };
@@ -44,7 +43,7 @@ async function verifyInstagramIdentity(page) {
 registerSiteAuthCommands({
   site: 'instagram',
   domain: 'instagram.com',
-  loginUrl: 'https://www.instagram.com/accounts/login/',
+  loginUrl: 'https://www.instagram.com/',
   columns: ['user_id', 'username', 'full_name'],
   quickCheck: hasInstagramSessionCookie,
   verify: verifyInstagramIdentity,

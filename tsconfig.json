@@ -10,7 +10,10 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "declaration": true,
-    "incremental": true
+    "incremental": true,
+    "paths": {
+      "@jackwener/opencli/*": ["./src/*.js"]
+    }
   },
   "include": [
     "src/**/*.ts"
