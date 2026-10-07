@@ -21,14 +21,16 @@ async function verifyYoutubeIdentity(page) {
       if (!loggedIn) {
         return { kind: 'auth', detail: 'YouTube ytcfg LOGGED_IN not true and no avatar — not signed in' };
       }
-      // Name is best-effort: YouTube's masthead avatar exposes a generic
-      // "Account menu" aria-label, so the channel name is often unavailable
-      // without opening the menu. Surface it when present, else leave empty.
       let name = '';
-      try { const ctx = cfg && cfg.get('INNERTUBE_CONTEXT'); name = (ctx && ctx.user && ctx.user.identityName) || ''; } catch {}
+      try { name = (cfg && cfg.get('USER_ACCOUNT_NAME')) || ''; } catch {}
       if (!name) {
+        try { const ctx = cfg && cfg.get('INNERTUBE_CONTEXT'); name = (ctx && ctx.user && ctx.user.identityName) || ''; } catch {}
+      }
+      if (!name) {
+        // The masthead avatar only exposes a localized "Account menu" label,
+        // which is not a name — reject anything menu-like in any locale.
         const aria = (document.querySelector('#avatar-btn')?.getAttribute('aria-label') || '').trim();
-        if (aria && !/^account menu$/i.test(aria)) name = aria;
+        if (aria && !/menu|菜单|メニュー|메뉴|帳戶|账户/i.test(aria)) name = aria;
       }
       return { ok: true, name: String(name || '') };
     })()

@@ -37,7 +37,7 @@ async function verifyInstagramIdentity(page) {
   if (result?.kind === 'dom') throw new CommandExecutionError(`Instagram profile link not found: ${result.detail}`);
   if (result?.kind === 'exception') throw new CommandExecutionError(`Instagram whoami failed: ${result.detail}`);
   if (!result?.ok) throw new CommandExecutionError(`Unexpected Instagram probe: ${JSON.stringify(result)}`);
-  return { user_id: result.user_id, username: result.username, full_name: result.full_name };
+  return { user_id: result.user_id, username: result.username, full_name: result.full_name || result.username };
 }
 
 registerSiteAuthCommands({
