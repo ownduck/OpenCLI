@@ -20,6 +20,7 @@ import {
   clickWhenReady,
   dismissOverlays,
   resultProbeJs,
+  humanWait,
 } from '../shared/publish-helpers.js';
 
 const ENTRY_URL = 'https://x.com/home';
@@ -49,6 +50,21 @@ const X = {
 };
 
 const INLINE_PROBE = `(() => ({ ok: !!document.querySelector('[data-testid="tweetTextarea_0"]') }))()`;
+
+// 发布前检查：字数上限取决于账户等级（未升级 280、Premium 更长），所以不在 CLI 侧判断，
+// 一律以页面状态为准 —— X 超限时会把 Post 按钮置为 disabled=true 且 aria-disabled=true，
+// 并在 toolbar 里显示负数计数。clickWhenReady 会过滤 disabled 按钮，直接等到超时，
+// 所以这里先探测并把页面的结论转成明确报错。
+const POSTABLE_PROBE = `(() => {
+  const vis = el => { const st = getComputedStyle(el); const r = el.getBoundingClientRect(); return st.display !== 'none' && st.visibility !== 'hidden' && r.width > 0 && r.height > 0; };
+  const btn = [...document.querySelectorAll('[data-testid="tweetButtonInline"], [data-testid="tweetButton"]')].filter(vis).pop();
+  if (!btn) return { ok: true };
+  const disabled = btn.disabled === true || btn.getAttribute('aria-disabled') === 'true';
+  if (!disabled) return { ok: true };
+  const bar = btn.closest('[data-testid="toolBar"]');
+  const m = bar ? (bar.textContent || '').match(/[-−]\\s?([\\d,]+)/) : null;
+  return { ok: false, over: m ? Number(m[1].replace(/,/g, '')) : null };
+})()`;
 
 async function openComposer(bp) {
   try {
@@ -115,7 +131,23 @@ cli({
       log.status('dry-run 完成，跳过发布按钮');
       return row('dry_run');
     }
-    await step(bp, PHASE.publish, () => clickWhenReady(bp, X.publishBtn, 45000, '发布按钮', SITE_HINT), 1.5, 3);
+    await step(bp, PHASE.publish, async () => {
+      const check = async () => await bp.evaluate(POSTABLE_PROBE).catch(() => ({ ok: true }));
+      let st = await check();
+      if (!st.ok) {
+        await humanWait(bp, 1.2, 2);
+        st = await check();
+        if (!st.ok) {
+          throw new CommandExecutionError(
+            st.over != null
+              ? `X 拒绝发布：正文超出当前账户的字符限制（页面显示超出 ${st.over} 字）。该上限由账户等级决定，请精简正文后重试`
+              : 'X 拒绝发布：发布按钮处于禁用状态且页面未显示超限计数，通常是媒体尚未上传完成，请稍后重试',
+            'Post button was disabled by X — re-check composer state (length limit or pending upload)',
+          );
+        }
+      }
+      await clickWhenReady(bp, X.publishBtn, 45000, '发布按钮', SITE_HINT);
+    }, 1.5, 3);
     return publishFinish(bp, {
       probeJs: resultProbeJs({
         goneSelector: '[data-testid="tweetButton"], [data-testid="tweetButtonInline"]',
