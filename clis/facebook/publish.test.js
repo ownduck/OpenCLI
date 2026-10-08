@@ -11,7 +11,7 @@ describe('facebook publish command registration', () => {
     const cmd = getRegistry().get('facebook/publish');
     expect(cmd).toBeDefined();
     expect(cmd.access).toBe('write');
-    expect(cmd.columns).toEqual(['status', 'url', 'post_id']);
+    expect(cmd.columns).toEqual(['status']);
   });
 });
 

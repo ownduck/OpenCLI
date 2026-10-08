@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { JSDOM } from 'jsdom';
 import { ArgumentError } from '@jackwener/opencli/errors';
 import { getRegistry } from '@jackwener/opencli/registry';
 import { __test__ } from './publish.js';
@@ -11,7 +12,7 @@ describe('twitter publish command registration', () => {
     const cmd = getRegistry().get('twitter/publish');
     expect(cmd).toBeDefined();
     expect(cmd.access).toBe('write');
-    expect(cmd.columns).toEqual(['status', 'url', 'post_id']);
+    expect(cmd.columns).toEqual(['status']);
   });
 
   it('keeps text optional and images optional', () => {
@@ -90,5 +91,60 @@ describe('normalizeMediaFiles', () => {
     } finally {
       fs.unlinkSync(img);
     }
+  });
+});
+
+describe('POSTABLE_PROBE', () => {
+  function runProbe(html) {
+    const dom = new JSDOM(`<!doctype html><html><body>${html}</body></html>`, {
+      url: 'https://x.com/compose/post',
+      runScripts: 'outside-only',
+    });
+    return dom.window.eval(__test__.POSTABLE_PROBE);
+  }
+
+  it('reads over-limit from countdown-circle', () => {
+    const st = runProbe(`
+      <div data-testid="countdown-circle">
+        <div aria-live="polite">You have exceeded the character limit by 715</div>
+        <div>-715</div>
+      </div>
+      <button data-testid="tweetButtonInline" disabled aria-disabled="true">Post</button>
+    `);
+    expect(st).toEqual({ ok: false, over: 715 });
+  });
+
+  it('returns disabled without over when circle absent (e.g. media pending)', () => {
+    const st = runProbe(`<button data-testid="tweetButtonInline" disabled aria-disabled="true">Post</button>`);
+    expect(st).toEqual({ ok: false, over: null });
+  });
+
+  it('returns ok when any Post is enabled (bottom tweetButton vs disabled inline)', () => {
+    const st = runProbe(`
+      <button data-testid="tweetButton">Post</button>
+      <button data-testid="tweetButtonInline" disabled aria-disabled="true">Post</button>
+    `);
+    expect(st).toEqual({ ok: true });
+  });
+});
+
+describe('mediaReadyJs', () => {
+  it('requires attachment preview, not just file input.files', () => {
+    const dom = new JSDOM(`<!doctype html><body>
+      <input type="file" />
+      <div data-testid="attachments"><div role="group"><img src="blob:https://x.com/a" /></div></div>
+    </body>`, { url: 'https://x.com/compose/post', runScripts: 'outside-only' });
+    // simulate a file selected on input without preview elsewhere
+    const input = dom.window.document.querySelector('input');
+    Object.defineProperty(input, 'files', { value: { length: 1 }, configurable: true });
+    expect(dom.window.eval(__test__.mediaReadyJs(1)).ok).toBe(true);
+
+    const empty = new JSDOM(`<!doctype html><body><input type="file" /></body>`, {
+      url: 'https://x.com/compose/post',
+      runScripts: 'outside-only',
+    });
+    const inp = empty.window.document.querySelector('input');
+    Object.defineProperty(inp, 'files', { value: { length: 1 }, configurable: true });
+    expect(empty.window.eval(__test__.mediaReadyJs(1))).toMatchObject({ ok: false, preview: 0 });
   });
 });

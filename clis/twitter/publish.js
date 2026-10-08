@@ -1,169 +1,152 @@
+/**
+ * Twitter/X publish — Playwright connectOverCDP。
+ * 仅 status；超限时抛错并保留标签。
+ */
 import { cli, Strategy } from '@jackwener/opencli/registry';
 import { ArgumentError, CommandExecutionError } from '@jackwener/opencli/errors';
 import { log } from '@jackwener/opencli/logger';
 import {
-  COLUMNS,
+  STATUS_COLUMNS,
   PHASE,
   resolveContent,
   normalizeMediaFiles,
-  requireLogin,
   buildArgs,
-  row,
-  step,
-  gotoWithRetry,
-  fillEditor,
-  attachMedia,
-  uploadProbeJs,
-  publishFinish,
-  locateJs,
-  waitFor,
-  clickWhenReady,
-  dismissOverlays,
-  resultProbeJs,
-  humanWait,
+  statusRow,
 } from '../shared/publish-helpers.js';
+import {
+  runPublishSession,
+  assertCookies,
+  humanWait,
+  randomWait,
+  step,
+  mouseClickLocator,
+  waitPublishDone,
+} from '../shared/pw-session.js';
 
-const ENTRY_URL = 'https://x.com/home';
+const ENTRY_URL = 'https://x.com/compose/post';
 const MAX_MEDIA = 4;
-const ID_PATTERN = /status\/(\d+)/;
 const SITE_HINT = 'X/Twitter UI may have changed — re-check the composer semantic selectors';
 
 const X = {
-  entry: [
-    '//*[@data-testid="SideNav_NewTweet_Button"]',
-    '//*[@data-testid="FloatingSideNav_NewTweet_Button"]',
-  ],
-  editor: [
-    '//*[@data-testid="tweetTextarea_0"]',
-    '//*[@role="dialog"]//div[@role="textbox"]',
-    '//div[@role="textbox"]',
-  ],
-  fileInput: [
-    '//*[@role="dialog"]//input[@type="file"]',
-    '//input[@type="file"]',
-  ],
-  publishBtn: [
-    '//*[@data-testid="tweetButtonInline"]',
-    '//*[@data-testid="tweetButton"]',
-    '//*[@role="dialog"]//button[@type="submit"]',
-  ],
+  editor: ['//*[@data-testid="tweetTextarea_0"]', '//div[@role="textbox"]'],
+  fileInput: ['//*[@data-testid="fileInput"]'],
+  publishBtn: ['//*[@data-testid="tweetButton"]', '//*[@data-testid="tweetButtonInline"]'],
 };
 
-const INLINE_PROBE = `(() => ({ ok: !!document.querySelector('[data-testid="tweetTextarea_0"]') }))()`;
-
-// 发布前检查：字数上限取决于账户等级（未升级 280、Premium 更长），所以不在 CLI 侧判断，
-// 一律以页面状态为准 —— X 超限时会把 Post 按钮置为 disabled=true 且 aria-disabled=true，
-// 并在 toolbar 里显示负数计数。clickWhenReady 会过滤 disabled 按钮，直接等到超时，
-// 所以这里先探测并把页面的结论转成明确报错。
-const POSTABLE_PROBE = `(() => {
-  const vis = el => { const st = getComputedStyle(el); const r = el.getBoundingClientRect(); return st.display !== 'none' && st.visibility !== 'hidden' && r.width > 0 && r.height > 0; };
-  const btn = [...document.querySelectorAll('[data-testid="tweetButtonInline"], [data-testid="tweetButton"]')].filter(vis).pop();
-  if (!btn) return { ok: true };
-  const disabled = btn.disabled === true || btn.getAttribute('aria-disabled') === 'true';
-  if (!disabled) return { ok: true };
-  const bar = btn.closest('[data-testid="toolBar"]');
-  const m = bar ? (bar.textContent || '').match(/[-−]\\s?([\\d,]+)/) : null;
-  return { ok: false, over: m ? Number(m[1].replace(/,/g, '')) : null };
-})()`;
-
-async function openComposer(bp) {
-  try {
-    await waitFor(bp, INLINE_PROBE, 25000, '首页内联发帖框', SITE_HINT);
-    log.verbose('首页内联发帖框已就绪，无需点击入口');
-    return;
-  } catch {
-    log.verbose('首页无内联发帖框，点击侧栏发帖入口');
+async function assertPostable(page) {
+  const info = await page.evaluate(() => {
+    const btns = [...document.querySelectorAll('[data-testid="tweetButton"], [data-testid="tweetButtonInline"]')];
+    if (!btns.length) return { ok: true };
+    const enabled = btns.some((b) => b.disabled !== true && b.getAttribute('aria-disabled') !== 'true');
+    if (enabled) return { ok: true };
+    const t = document.querySelector('[data-testid="countdown-circle"]')?.innerText
+      || document.querySelector('[data-testid="countdown-circle"]')?.textContent || '';
+    const m = t.match(/exceeded the character limit by\s*([\d,]+)/i)
+      || t.match(/超出[^\d]*([\d,]+)\s*字/)
+      || t.match(/[-−–—－]\s*([\d,]+)/);
+    const over = m ? Number(String(m[1]).replace(/,/g, '')) : null;
+    return { ok: false, over: Number.isFinite(over) ? over : null, t: t.slice(0, 80) };
+  });
+  if (!info.ok) {
+    const detail = info.over != null ? `超出 ${info.over} 字` : (info.t || 'Post 按钮不可用');
+    throw new CommandExecutionError(`Twitter 无法发布：${detail}`, SITE_HINT);
   }
-  await clickWhenReady(bp, X.entry, 30000, '发帖入口', SITE_HINT);
+}
+
+async function waitMediaPreview(page, n, timeoutMs = 60000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const ok = await page.evaluate((need) => {
+      const attachments = document.querySelector('[data-testid="attachments"]');
+      const preview = Math.max(
+        attachments ? attachments.querySelectorAll('[role="group"], img, video').length : 0,
+        document.querySelectorAll('[data-testid="tweetPhoto"], img[src^="blob:"]').length,
+      );
+      return preview >= need;
+    }, n);
+    if (ok) return;
+    await page.waitForTimeout(400);
+  }
+  throw new CommandExecutionError('媒体预览未出现', SITE_HINT);
 }
 
 cli({
   site: 'twitter',
   name: 'publish',
   access: 'write',
-  description: 'Publish a text/image post to X (Twitter)',
+  description: 'Publish a text/image post to X/Twitter (Playwright + CDP endpoint)',
   domain: 'x.com',
   strategy: Strategy.UI,
-  browser: true,
-  siteSession: 'persistent',
-  defaultWindowMode: 'foreground',
-  args: buildArgs({ media: 'image' }),
-  columns: COLUMNS,
-  func: async (page, kwargs) => {
-    const bp = page;
-    if (!bp) throw new CommandExecutionError('Browser session required for twitter publish');
-    await requireLogin(bp, ENTRY_URL, ['auth_token', 'ct0'], 'x.com');
-    log.status('已登录，开始整理发布内容');
+  browser: false,
+  args: buildArgs({ media: 'image', timeout: 180 }),
+  columns: STATUS_COLUMNS,
+  func: async (kwargs) => {
     const content = resolveContent({ text: kwargs.text, file: kwargs.file });
     const { images } = normalizeMediaFiles({ images: kwargs.images });
     if (images.length > MAX_MEDIA) throw new ArgumentError(`Too many images: ${images.length} (max ${MAX_MEDIA})`);
-    if (!content && images.length === 0) throw new ArgumentError('Provide --text/--file or --images (nothing to publish)');
+    if (!content && images.length === 0) throw new ArgumentError('Provide --text/--file or --images');
     const timeout = Number(kwargs.timeout) || 180;
     const dryRun = Boolean(kwargs['dry-run'] ?? kwargs.dryRun);
     log.status(`内容 ${content.length} 字，图片 ${images.length} 个${dryRun ? '（dry-run）' : ''}`);
 
-    await step(bp, PHASE.open, () => gotoWithRetry(bp, ENTRY_URL), 2.4, 4.8);
-    await step(bp, PHASE.overlay, () => dismissOverlays(bp, 2), 0.8, 1.6);
-    await step(bp, PHASE.entry, () => openComposer(bp), 1.5, 3);
+    return runPublishSession({
+      entryUrl: ENTRY_URL,
+      fn: async ({ page, context }) => {
+        await assertCookies(context, 'https://x.com', ['auth_token', 'ct0'], 'Twitter/X');
+        log.status('已登录，开始整理发布内容');
+        await humanWait(page, 0.8, 1.4);
 
-    const editor = await step(bp, PHASE.editor, () => waitFor(bp, locateJs(X.editor, 'data-opencli-tw-editor'), 30000, '发帖内容框', SITE_HINT), 1.5, 3);
-    if (!editor?.ok) throw new CommandExecutionError('X composer textbox not found', SITE_HINT);
-    log.verbose(`内容框选择器：${editor.selector}`);
+        await step(page, PHASE.open, () => page.goto(ENTRY_URL, { waitUntil: 'domcontentloaded', timeout: 180000 }), 2.4, 4.0);
 
-    if (images.length) {
-      await step(bp, PHASE.media, () => attachMedia(bp, {
-        files: images,
-        pasteTargets: X.editor,
-        fileInputXpaths: X.fileInput,
-        acceptHint: 'image',
-        readyProbeJs: uploadProbeJs(images.length, [], ['could not be processed', 'unsupported', '不支持']),
-        pasteTimeoutMs: 25000,
-        readyTimeoutMs: 60000,
-        label: '图片',
-        hint: SITE_HINT,
-      }), 2.4, 4.8);
-      log.status(`已附加 ${images.length} 个图片`);
-    }
+        const editor = page.locator('[data-testid="tweetTextarea_0"], [role="textbox"]').first();
+        await step(page, PHASE.editor, () => editor.waitFor({ state: 'visible', timeout: 45000 }), 1.5, 2.5);
 
-    if (content) await step(bp, PHASE.text, () => fillEditor(bp, editor.selector, content), 1.5, 3);
-    await step(bp, PHASE.settings, async () => { log.verbose('X 无发布前设置，跳过'); }, 0.2, 0.4);
-    if (dryRun) {
-      log.status('dry-run 完成，跳过发布按钮');
-      return row('dry_run');
-    }
-    await step(bp, PHASE.publish, async () => {
-      const check = async () => await bp.evaluate(POSTABLE_PROBE).catch(() => ({ ok: true }));
-      let st = await check();
-      if (!st.ok) {
-        await humanWait(bp, 1.2, 2);
-        st = await check();
-        if (!st.ok) {
-          throw new CommandExecutionError(
-            st.over != null
-              ? `X 拒绝发布：正文超出当前账户的字符限制（页面显示超出 ${st.over} 字）。该上限由账户等级决定，请精简正文后重试`
-              : 'X 拒绝发布：发布按钮处于禁用状态且页面未显示超限计数，通常是媒体尚未上传完成，请稍后重试',
-            'Post button was disabled by X — re-check composer state (length limit or pending upload)',
-          );
+        // 先文后图
+        if (content) {
+          await step(page, PHASE.text, async () => {
+            await editor.click({ force: true });
+            await randomWait(page, 150, 350);
+            try { await editor.fill(content); } catch { await page.keyboard.insertText(content); }
+            log.status(`· 已填入正文 ${content.length} 字`);
+          }, 1.5, 2.8);
         }
-      }
-      await clickWhenReady(bp, X.publishBtn, 45000, '发布按钮', SITE_HINT);
-    }, 1.5, 3);
-    return publishFinish(bp, {
-      probeJs: resultProbeJs({
-        goneSelector: '[data-testid="tweetButton"], [data-testid="tweetButtonInline"]',
-        urlPattern: '/status/\\d+',
-        texts: ['your post was sent', '已发布', '已发送'],
-        base: 'https://x.com',
-      }),
-      timeoutMs: timeout * 1000,
-      hint: SITE_HINT,
-      idPattern: ID_PATTERN,
+        if (images.length) {
+          await step(page, PHASE.media, async () => {
+            const input = page.locator('[data-testid="fileInput"], input[type="file"]').first();
+            await input.setInputFiles(images);
+            await waitMediaPreview(page, images.length);
+            log.status(`· 已附加 ${images.length} 个图片`);
+          }, 2.4, 4.0);
+        }
+
+        const pub = await step(page, PHASE.publish, async () => {
+          // dry-run 也要看得到按钮；超限时按钮可能灰，仍定位
+          const btn = page.locator('[data-testid="tweetButton"], [data-testid="tweetButtonInline"]').first();
+          await btn.waitFor({ state: 'visible', timeout: 30000 });
+          const label = ((await btn.innerText().catch(() => '')) || 'Post').replace(/\s+/g, ' ').trim();
+          const box = await btn.boundingBox().catch(() => null);
+          log.status(`· 已定位发布热区「${label}」` + (box ? ` @${Math.round(box.x)},${Math.round(box.y)}` : ''));
+          return { loc: btn, label };
+        }, 1.2, 2.0);
+
+        if (dryRun) {
+          log.status(`dry-run：已定位发布按钮（${pub.label}），跳过点击`);
+          return statusRow('dry_run');
+        }
+
+        await assertPostable(page);
+        await mouseClickLocator(page, pub.loc);
+        await humanWait(page, 2.5, 4.0);
+        await step(page, PHASE.result, () => waitPublishDone(page, {
+          timeoutMs: Math.max(45000, timeout * 1000),
+          // 成功：composer 消失（不靠 toast 文案）
+          goneSel: '[data-testid="tweetTextarea_0"]',
+        }), 1.0, 1.8);
+        log.status('已发布');
+        return statusRow('published');
+      },
     });
   },
 });
 
-export const __test__ = {
-  resolveContent,
-  normalizeMediaFiles,
-  X,
-};
+export const __test__ = { resolveContent, normalizeMediaFiles, X };

@@ -1,211 +1,192 @@
+/**
+ * LinkedIn publish — Playwright connectOverCDP。
+ * Shadow DOM 弹层；限流检测；仅 status。
+ */
 import { cli, Strategy } from '@jackwener/opencli/registry';
 import { ArgumentError, CommandExecutionError } from '@jackwener/opencli/errors';
 import { log } from '@jackwener/opencli/logger';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import {
-  COLUMNS,
+  STATUS_COLUMNS,
   PHASE,
   resolveContent,
   normalizeMediaFiles,
-  requireLogin,
   buildArgs,
-  row,
-  step,
-  humanWait,
-  gotoWithRetry,
-  fillEditor,
-  attachMedia,
-  uploadProbeJs,
-  publishFinish,
-  locateJs,
-  waitFor,
-  clickWhenReady,
-  dismissOverlays,
-  footerActionJs,
-  resultProbeJs,
+  statusRow,
 } from '../shared/publish-helpers.js';
+import {
+  runPublishSession,
+  assertCookies,
+  humanWait,
+  randomWait,
+  step,
+  firstVisible,
+  mouseClickLocator,
+} from '../shared/pw-session.js';
 
-const ENTRY_URL = 'https://www.linkedin.com/preload/sharebox/';
+const ENTRY_URL = 'https://www.linkedin.com/feed/';
 const MAX_MEDIA = 9;
-const ACTION_ATTR = 'data-opencli-li-action';
-const ID_PATTERN = /(?:share|activity):(\d+)/;
-const SITE_HINT = 'LinkedIn UI may have changed — re-check the composer page semantic selectors';
+const SITE_HINT = 'LinkedIn UI may have changed — re-check the feed composer semantic selectors';
 
 const X = {
-  editor: [
-    '//div[@role="textbox"]',
-    '//div[contains(@class, "ql-editor")]',
-    '//div[@contenteditable="true"]',
-  ],
-  fileInput: [
-    '//input[@type="file"]',
-  ],
-  publishBtn: [
-    '//button[contains(@class, "share-actions__primary-action")]',
-    '//*[@role="dialog"]//button[contains(@class, "artdeco-button--primary")][not(ancestor::*[contains(@class, "media-editor")])]',
-  ],
+  entry: ['//a[contains(@href,"/preload/sharebox")]'],
+  editor: ['//*[@role="dialog"]//*[@role="textbox"]', '//*[@role="dialog"]//div[contains(@class,"ql-editor")]'],
 };
 
-const DIALOG_PROBE = `(() => ({ ok: !!document.querySelector('[role="dialog"]') }))()`;
-const URL_PROBE = `(() => ({ url: location.href }))()`;
-const MEDIA_EDITOR_SEL = '[class*="media-editor"], [class*="share-box-footer__primary-btn"]';
-const MEDIA_EDITOR_PROBE = `(() => {
-  for (const el of document.querySelectorAll(${JSON.stringify(MEDIA_EDITOR_SEL)})) {
-    const st = getComputedStyle(el); const r = el.getBoundingClientRect();
-    if (st.display !== 'none' && st.visibility !== 'hidden' && r.width > 0 && r.height > 0) return { ok: true };
-  }
-  return { ok: false };
-})()`;
-const MEDIA_EDITOR_GONE = `(() => {
-  for (const el of document.querySelectorAll(${JSON.stringify(MEDIA_EDITOR_SEL)})) {
-    const st = getComputedStyle(el); const r = el.getBoundingClientRect();
-    if (st.display !== 'none' && st.visibility !== 'hidden' && r.width > 0 && r.height > 0) return { ok: false };
-  }
-  return { ok: true };
-})()`;
+async function openComposer(page) {
+  // 稳定 href，不靠 aria-label 文案
+  const target = await firstVisible(page, [
+    'a[href*="/preload/sharebox"]',
+    'button.share-box-feed-entry__trigger',
+    '.share-box-feed-entry__trigger',
+  ], 60000);
+  if (!target) throw new CommandExecutionError('发动态热区 not found', SITE_HINT);
+  log.status('· 点击发动态热区');
+  await mouseClickLocator(page, target);
+  await humanWait(page, 2.0, 3.5);
 
-const X_EDITOR_PROBE = [
-  '//*[contains(@class, "media-editor")]//button[contains(@class, "artdeco-button--primary")]',
-  '//button[contains(@class, "share-box-footer__primary-btn")]',
-];
-
-const LIMIT_PROBE = `(() => {
-  const t = (document.body.innerText || '').toLowerCase();
-  const keys = ['上限', '立即验证', '已达', 'too many', 'daily limit', 'limit reached', 'unsual'];
-  return { hit: keys.filter(k => t.includes(k)).join(' / ') };
-})()`;
-
-async function watchLimit(bp, seconds = 12) {
-  const deadline = Date.now() + seconds * 1000;
-  while (Date.now() < deadline) {
-    const hit = (await bp.evaluate(LIMIT_PROBE).catch(() => null))?.hit;
-    if (hit) return hit;
-    await bp.wait({ time: 0.8 });
-  }
-  return '';
+  const dialog = page.locator('[role="dialog"].share-box-v2__modal, .share-box-v2__modal, [role="dialog"]').first();
+  await dialog.waitFor({ state: 'visible', timeout: 60000 });
+  const editor = dialog.locator('[role="textbox"], .ql-editor, [contenteditable="true"]').first();
+  await editor.waitFor({ state: 'visible', timeout: 30000 });
+  log.status('· 发帖框已打开');
+  return { dialog, editor };
 }
 
-async function advanceFromMediaEditor(bp, maxSteps) {
-  let entered = false;
-  try {
-    await waitFor(bp, MEDIA_EDITOR_PROBE, 12000, '图片编辑器', SITE_HINT);
-    entered = true;
-  } catch {
-    log.verbose('未进入图片编辑器，继续填写正文');
-    return;
+async function pasteImages(page, editor, files) {
+  for (const filePath of files) {
+    const abs = path.resolve(filePath);
+    const b64 = fs.readFileSync(abs).toString('base64');
+    const ext = path.extname(abs).toLowerCase();
+    const mime = ({ '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp' })[ext] || 'application/octet-stream';
+    const name = path.basename(abs);
+    await editor.click({ force: true });
+    await editor.evaluate((el, { b64, mime, name }) => {
+      const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+      const file = new File([bytes], name, { type: mime });
+      const dt = new DataTransfer();
+      dt.items.add(file);
+      el.focus();
+      el.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+    }, { b64, mime, name });
+    await humanWait(page, 1.2, 2.0);
   }
-  for (let i = 1; i <= maxSteps && entered; i++) {
-    await clickWhenReady(bp, X_EDITOR_PROBE, 20000, '图片编辑器下一步', SITE_HINT);
-    log.status(`· 已通过图片编辑器（第 ${i} 步）`);
-    try {
-      await waitFor(bp, MEDIA_EDITOR_GONE, 25000, '图片编辑器退出', SITE_HINT);
-    } catch {
-      log.verbose('图片编辑器仍在，继续下一步');
-    }
-    await humanWait(bp, 2.4, 4.8);
-    entered = Boolean((await bp.evaluate(MEDIA_EDITOR_PROBE))?.ok);
+  // 媒体编辑器：点 primary，不靠「完成/Done」文案
+  for (let i = 0; i < files.length + 2; i++) {
+    const next = page.locator('[class*="media-editor"] button.artdeco-button--primary').first();
+    if (!(await next.isVisible().catch(() => false))) break;
+    await mouseClickLocator(page, next).catch(() => {});
+    await humanWait(page, 1.5, 2.5);
   }
+  log.status(`· 已附加 ${files.length} 个图片`);
 }
 
-async function clickPublish(bp) {
-  for (let i = 1; i <= 2; i++) {
-    try {
-      await clickWhenReady(bp, X.publishBtn, 30000, '发布按钮', SITE_HINT);
-    } catch {
-      await waitFor(bp, footerActionJs(ACTION_ATTR), 20000, '发布按钮（兜底）', SITE_HINT);
-      await clickWhenReady(bp, [`//*[@${ACTION_ATTR}="1"]`], 15000, '发布按钮（兜底点击）', SITE_HINT);
-    }
-    const limit = await watchLimit(bp, 12);
-    if (limit) throw new CommandExecutionError('LinkedIn 发布被限流', `页面提示：${limit} — 今日发布上限，需「立即验证」或次日再试`);
-    if (!(await bp.evaluate(DIALOG_PROBE))?.ok) return true;
-    if (/urn:li:(share|activity)/.test((await bp.evaluate(URL_PROBE))?.url || '')) return true;
-    log.verbose(`发布按钮第 ${i} 次点击后发帖框仍在，重试`);
+async function findPublishButton(dialog) {
+  // 固定 class：share-actions__primary-action
+  const primary = dialog.locator('button.share-actions__primary-action').first();
+  if (await primary.isVisible().catch(() => false)) {
+    return { loc: primary, label: 'primary' };
   }
-  const limit = ((await bp.evaluate(LIMIT_PROBE))?.hit) || '';
-  throw new CommandExecutionError('LinkedIn 发帖框在点击发布后未关闭',
-    limit
-      ? `页面检测到疑似限流提示（${limit}）— LinkedIn 今日发布上限，需「立即验证」或次日再试；也可到 linkedin.com 手动确认`
-      : '可能被限流（今日发布上限）、内容为空或需要二次验证 — 请到 linkedin.com 手动确认后再重试');
+  const fallback = dialog.locator('.share-actions button.artdeco-button--primary, footer button.artdeco-button--primary').first();
+  if (await fallback.isVisible().catch(() => false)) {
+    return { loc: fallback, label: 'primary' };
+  }
+  return null;
+}
+
+async function assertNotRateLimited(page) {
+  const t = (await page.evaluate(() => {
+    const parts = [document.body?.innerText || ''];
+    for (const el of document.querySelectorAll('[role="dialog"], .artdeco-modal, .share-box-v2__modal')) {
+      parts.push(el.innerText || '');
+    }
+    // open shadow
+    for (const host of document.querySelectorAll('*')) {
+      if (host.shadowRoot) parts.push(host.shadowRoot.textContent || '');
+    }
+    return parts.join('\n');
+  }).catch(() => '')).toLowerCase();
+  const keys = ['上限', '立即验证', '已达', '验证身份', 'too many', 'daily limit', 'limit reached', 'temporarily restricted'];
+  const hit = keys.filter((k) => t.includes(k)).join(' / ');
+  if (hit) throw new CommandExecutionError('LinkedIn 发布被限流', `页面提示：${hit}`);
 }
 
 cli({
   site: 'linkedin',
   name: 'publish',
   access: 'write',
-  description: 'Publish a text/image post to your LinkedIn feed',
+  description: 'Publish a text/image post to LinkedIn (Playwright + CDP endpoint)',
   domain: 'www.linkedin.com',
   strategy: Strategy.UI,
-  browser: true,
-  siteSession: 'persistent',
-  defaultWindowMode: 'foreground',
-  args: buildArgs({ media: 'image' }),
-  columns: COLUMNS,
-  func: async (page, kwargs) => {
-    const bp = page;
-    if (!bp) throw new CommandExecutionError('Browser session required for linkedin publish');
-    await requireLogin(bp, ENTRY_URL, ['li_at'], 'www.linkedin.com');
-    log.status('已登录，开始整理发布内容');
+  browser: false,
+  args: buildArgs({ media: 'image', timeout: 180 }),
+  columns: STATUS_COLUMNS,
+  func: async (kwargs) => {
     const content = resolveContent({ text: kwargs.text, file: kwargs.file });
     const { images } = normalizeMediaFiles({ images: kwargs.images });
-    if (images.length > MAX_MEDIA) throw new ArgumentError(`Too many images: ${images.length} (max ${MAX_MEDIA})`);
-    if (!content && images.length === 0) throw new ArgumentError('Provide --text/--file or --images (nothing to publish)');
+    if (images.length > MAX_MEDIA) throw new ArgumentError(`Too many images: ${images.length}`);
+    if (!content && images.length === 0) throw new ArgumentError('Provide --text/--file or --images');
     const timeout = Number(kwargs.timeout) || 180;
     const dryRun = Boolean(kwargs['dry-run'] ?? kwargs.dryRun);
     log.status(`内容 ${content.length} 字，图片 ${images.length} 个${dryRun ? '（dry-run）' : ''}`);
 
-    await step(bp, PHASE.open, () => gotoWithRetry(bp, ENTRY_URL), 2.4, 4.8);
-    await step(bp, PHASE.overlay, () => dismissOverlays(bp, 2), 0.8, 1.6);
-    await step(bp, PHASE.entry, async () => { log.verbose('入口页即发帖框，无需额外触发'); }, 0.2, 0.4);
+    return runPublishSession({
+      entryUrl: ENTRY_URL,
+      fn: async ({ page, context }) => {
+        await assertCookies(context, 'https://www.linkedin.com', ['li_at'], 'LinkedIn');
+        log.status('已登录，开始整理发布内容');
+        await humanWait(page, 0.8, 1.4);
 
-    const editor = await step(bp, PHASE.editor, () => waitFor(bp, locateJs(X.editor, 'data-opencli-li-editor'), 45000, '发帖内容框', SITE_HINT), 1.5, 3);
-    if (!editor?.ok) throw new CommandExecutionError('LinkedIn composer textbox not found', SITE_HINT);
-    log.verbose(`内容框选择器：${editor.selector}`);
+        await step(page, PHASE.open, () => page.goto(ENTRY_URL, { waitUntil: 'domcontentloaded', timeout: 180000 }), 2.4, 4.0);
+        await step(page, PHASE.overlay, async () => { /* feed 遮罩较少 */ }, 0.4, 0.8);
 
-    if (images.length) {
-      await step(bp, PHASE.media, async () => {
-        const r = await attachMedia(bp, {
-          files: images,
-          pasteTargets: X.editor,
-          fileInputXpaths: X.fileInput,
-          acceptHint: 'image',
-          readyProbeJs: uploadProbeJs(images.length, ['编辑预览', '删除媒体文件'], ['unsupported', '不支持']),
-          pasteTimeoutMs: 25000,
-          readyTimeoutMs: 60000,
-          label: '图片',
-          hint: SITE_HINT,
-        });
-        await advanceFromMediaEditor(bp, images.length + 1);
-        return r;
-      }, 2.4, 4.8);
-      log.status(`已附加 ${images.length} 个图片`);
-    }
+        const { dialog, editor } = await step(page, PHASE.entry, () => openComposer(page), 1.5, 2.8);
+        await editor.evaluate((el) => el.setAttribute('data-opencli-li-editor', '1'));
 
-    if (content) {
-      await step(bp, PHASE.text, async () => {
-        await advanceFromMediaEditor(bp, images.length + 1);
-        await fillEditor(bp, editor.selector, content, locateJs(X.editor, 'data-opencli-li-editor'));
-      }, 1.5, 3);
-    }
-    await step(bp, PHASE.settings, async () => { log.verbose('LinkedIn 无发布前设置，跳过'); }, 0.2, 0.4);
-    if (dryRun) {
-      log.status('dry-run 完成，跳过发布按钮');
-      return row('dry_run');
-    }
-    await step(bp, PHASE.publish, () => clickPublish(bp), 1.5, 3);
-    return publishFinish(bp, {
-      probeJs: resultProbeJs({
-        goneSelector: '[role="dialog"]',
-        urlPattern: 'urn:li:(share|activity)',
-        texts: ['已发布', '发布成功', 'post was published'],
-      }),
-      timeoutMs: timeout * 1000,
-      hint: SITE_HINT,
-      idPattern: ID_PATTERN,
+        if (content) {
+          await step(page, PHASE.text, async () => {
+            await editor.click({ force: true });
+            await randomWait(page, 200, 400);
+            try { await editor.fill(content); } catch { await page.keyboard.insertText(content); }
+            log.status(`· 已填入正文 ${content.length} 字`);
+          }, 1.5, 2.8);
+        }
+        if (images.length) {
+          await step(page, PHASE.media, () => pasteImages(page, editor, images), 2.4, 4.5);
+        }
+
+        const pub = await step(page, PHASE.publish, async () => {
+          const btn = await findPublishButton(dialog);
+          if (!btn) throw new CommandExecutionError('发布按钮 not found', SITE_HINT);
+          const box = await btn.loc.boundingBox().catch(() => null);
+          log.status(`· 已定位发布热区「${btn.label}」` + (box ? ` @${Math.round(box.x)},${Math.round(box.y)}` : ''));
+          return btn;
+        }, 1.2, 2.0);
+
+        if (dryRun) {
+          log.status(`dry-run：已定位发布按钮（${pub.label}），跳过点击`);
+          return statusRow('dry_run');
+        }
+
+        await mouseClickLocator(page, pub.loc);
+        await humanWait(page, 2.0, 3.5);
+        await step(page, PHASE.result, async () => {
+          const deadline = Date.now() + Math.min(90000, Math.max(30000, timeout * 1000));
+          while (Date.now() < deadline) {
+            await assertNotRateLimited(page);
+            const gone = !(await page.locator('.share-box-v2__modal, [role="dialog"]').first().isVisible().catch(() => false));
+            if (gone) return;
+            await page.waitForTimeout(700);
+          }
+          await assertNotRateLimited(page);
+          throw new CommandExecutionError('publish step timed out: 发布结果', SITE_HINT);
+        }, 0.5, 1.0);
+        log.status('已发布');
+        return statusRow('published');
+      },
     });
   },
 });
 
-export const __test__ = {
-  resolveContent,
-  normalizeMediaFiles,
-  X,
-};
+export const __test__ = { resolveContent, normalizeMediaFiles, X };

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { JSDOM } from 'jsdom';
 import { ArgumentError } from '@jackwener/opencli/errors';
 import { getRegistry } from '@jackwener/opencli/registry';
 import { __test__ } from './publish.js';
@@ -11,7 +12,7 @@ describe('youtube publish command registration', () => {
     const cmd = getRegistry().get('youtube/publish');
     expect(cmd).toBeDefined();
     expect(cmd.access).toBe('write');
-    expect(cmd.columns).toEqual(['status', 'url', 'post_id']);
+    expect(cmd.columns).toEqual(['status']);
   });
 
   it('declares videos as a required arg', () => {
@@ -89,5 +90,41 @@ describe('normalizeMediaFiles', () => {
     } finally {
       fs.unlinkSync(vid);
     }
+  });
+});
+
+describe('upload limit probes', () => {
+  function run(html, expr) {
+    const dom = new JSDOM(`<!doctype html><html><body>${html}</body></html>`, {
+      url: 'https://studio.youtube.com',
+      runScripts: 'outside-only',
+    });
+    return dom.window.eval(expr);
+  }
+
+  it('detects 已达到每日上传数上限 in uploads dialog', () => {
+    const st = run(
+      `<ytcp-uploads-dialog><div>已达到每日上传数上限</div><div>完成一次性验证即可每天上传更多视频</div></ytcp-uploads-dialog>`,
+      __test__.UPLOAD_LIMIT_PROBE,
+    );
+    expect(st.ok).toBe(true);
+    expect(st.text).toContain('已达到每日上传数上限');
+  });
+
+  it('DETAILS_READY completes early when limit banner appears', () => {
+    const st = run(
+      `<ytcp-uploads-dialog><div>已达到每日上传数上限</div></ytcp-uploads-dialog>`,
+      __test__.DETAILS_READY,
+    );
+    expect(st).toEqual({ ok: true, limit: true });
+  });
+
+  it('DETAILS_READY waits for textboxes when no limit', () => {
+    expect(run(`<ytcp-uploads-dialog></ytcp-uploads-dialog>`, __test__.DETAILS_READY))
+      .toEqual({ ok: false, limit: false });
+    expect(run(
+      `<ytcp-uploads-dialog><div role="textbox"></div></ytcp-uploads-dialog>`,
+      __test__.DETAILS_READY,
+    )).toEqual({ ok: true, limit: false });
   });
 });

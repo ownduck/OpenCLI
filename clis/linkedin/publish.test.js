@@ -11,7 +11,7 @@ describe('linkedin publish command registration', () => {
     const cmd = getRegistry().get('linkedin/publish');
     expect(cmd).toBeDefined();
     expect(cmd.access).toBe('write');
-    expect(cmd.columns).toEqual(['status', 'url', 'post_id']);
+    expect(cmd.columns).toEqual(['status']);
   });
 
   it('keeps text optional and images optional', () => {

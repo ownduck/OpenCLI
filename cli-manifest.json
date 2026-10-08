@@ -14385,11 +14385,11 @@
   {
     "site": "facebook",
     "name": "publish",
-    "description": "Publish a text/image/video post to your Facebook feed",
+    "description": "Publish a text/image post to Facebook (Playwright + CDP endpoint)",
     "access": "write",
     "domain": "www.facebook.com",
     "strategy": "ui",
-    "browser": true,
+    "browser": false,
     "args": [
       {
         "name": "text",
@@ -14421,7 +14421,7 @@
         "type": "bool",
         "default": false,
         "required": false,
-        "help": "Fill everything, skip the final submit"
+        "help": "Fill draft until the final publish control is located; do not click it"
       },
       {
         "name": "timeout",
@@ -14432,16 +14432,12 @@
       }
     ],
     "columns": [
-      "status",
-      "url",
-      "post_id"
+      "status"
     ],
     "type": "js",
     "modulePath": "facebook/publish.js",
     "sourceFile": "facebook/publish.js",
-    "navigateBefore": true,
-    "siteSession": "persistent",
-    "defaultWindowMode": "foreground"
+    "navigateBefore": true
   },
   {
     "site": "facebook",
@@ -20036,11 +20032,11 @@
   {
     "site": "instagram",
     "name": "publish",
-    "description": "Publish an image post with a caption to Instagram",
+    "description": "Publish an image post with a caption to Instagram (Playwright + CDP endpoint)",
     "access": "write",
     "domain": "www.instagram.com",
     "strategy": "ui",
-    "browser": true,
+    "browser": false,
     "args": [
       {
         "name": "text",
@@ -20066,7 +20062,7 @@
         "type": "bool",
         "default": false,
         "required": false,
-        "help": "Fill everything, skip the final submit"
+        "help": "Fill draft until the final publish control is located; do not click it"
       },
       {
         "name": "timeout",
@@ -20077,16 +20073,12 @@
       }
     ],
     "columns": [
-      "status",
-      "url",
-      "post_id"
+      "status"
     ],
     "type": "js",
     "modulePath": "instagram/publish.js",
     "sourceFile": "instagram/publish.js",
-    "navigateBefore": true,
-    "siteSession": "persistent",
-    "defaultWindowMode": "foreground"
+    "navigateBefore": true
   },
   {
     "site": "instagram",
@@ -23888,11 +23880,11 @@
   {
     "site": "linkedin",
     "name": "publish",
-    "description": "Publish a text/image post to your LinkedIn feed",
+    "description": "Publish a text/image post to LinkedIn (Playwright + CDP endpoint)",
     "access": "write",
     "domain": "www.linkedin.com",
     "strategy": "ui",
-    "browser": true,
+    "browser": false,
     "args": [
       {
         "name": "text",
@@ -23918,7 +23910,7 @@
         "type": "bool",
         "default": false,
         "required": false,
-        "help": "Fill everything, skip the final submit"
+        "help": "Fill draft until the final publish control is located; do not click it"
       },
       {
         "name": "timeout",
@@ -23929,16 +23921,12 @@
       }
     ],
     "columns": [
-      "status",
-      "url",
-      "post_id"
+      "status"
     ],
     "type": "js",
     "modulePath": "linkedin/publish.js",
     "sourceFile": "linkedin/publish.js",
-    "navigateBefore": true,
-    "siteSession": "persistent",
-    "defaultWindowMode": "foreground"
+    "navigateBefore": true
   },
   {
     "site": "linkedin",
@@ -38286,11 +38274,11 @@
   {
     "site": "tiktok",
     "name": "publish",
-    "description": "Upload a video with a caption to TikTok",
+    "description": "Upload a video with a caption to TikTok (Playwright + CDP endpoint)",
     "access": "write",
     "domain": "www.tiktok.com",
     "strategy": "ui",
-    "browser": true,
+    "browser": false,
     "args": [
       {
         "name": "text",
@@ -38316,7 +38304,7 @@
         "type": "bool",
         "default": false,
         "required": false,
-        "help": "Fill everything, skip the final submit"
+        "help": "Fill draft until the final publish control is located; do not click it"
       },
       {
         "name": "timeout",
@@ -38327,16 +38315,12 @@
       }
     ],
     "columns": [
-      "status",
-      "url",
-      "post_id"
+      "status"
     ],
     "type": "js",
     "modulePath": "tiktok/publish.js",
     "sourceFile": "tiktok/publish.js",
-    "navigateBefore": true,
-    "siteSession": "persistent",
-    "defaultWindowMode": "foreground"
+    "navigateBefore": true
   },
   {
     "site": "tiktok",
@@ -41853,11 +41837,11 @@
   {
     "site": "twitter",
     "name": "publish",
-    "description": "Publish a text/image post to X (Twitter)",
+    "description": "Publish a text/image post to X/Twitter (Playwright + CDP endpoint)",
     "access": "write",
     "domain": "x.com",
     "strategy": "ui",
-    "browser": true,
+    "browser": false,
     "args": [
       {
         "name": "text",
@@ -41883,7 +41867,7 @@
         "type": "bool",
         "default": false,
         "required": false,
-        "help": "Fill everything, skip the final submit"
+        "help": "Fill draft until the final publish control is located; do not click it"
       },
       {
         "name": "timeout",
@@ -41894,16 +41878,12 @@
       }
     ],
     "columns": [
-      "status",
-      "url",
-      "post_id"
+      "status"
     ],
     "type": "js",
     "modulePath": "twitter/publish.js",
     "sourceFile": "twitter/publish.js",
-    "navigateBefore": true,
-    "siteSession": "persistent",
-    "defaultWindowMode": "foreground"
+    "navigateBefore": true
   },
   {
     "site": "twitter",
@@ -48314,11 +48294,11 @@
   {
     "site": "youtube",
     "name": "publish",
-    "description": "Upload a video with a title/description to YouTube",
+    "description": "Upload a video to YouTube Studio (Playwright + CDP endpoint)",
     "access": "write",
-    "domain": "www.youtube.com",
+    "domain": "studio.youtube.com",
     "strategy": "ui",
-    "browser": true,
+    "browser": false,
     "args": [
       {
         "name": "text",
@@ -48344,27 +48324,23 @@
         "type": "bool",
         "default": false,
         "required": false,
-        "help": "Fill everything, skip the final submit"
+        "help": "Fill draft until the final publish control is located; do not click it"
       },
       {
         "name": "timeout",
         "type": "int",
-        "default": 300,
+        "default": 600,
         "required": false,
-        "help": "Max seconds for the publish command (default: 300)"
+        "help": "Max seconds for the publish command (default: 600)"
       }
     ],
     "columns": [
-      "status",
-      "url",
-      "post_id"
+      "status"
     ],
     "type": "js",
     "modulePath": "youtube/publish.js",
     "sourceFile": "youtube/publish.js",
-    "navigateBefore": true,
-    "siteSession": "persistent",
-    "defaultWindowMode": "foreground"
+    "navigateBefore": true
   },
   {
     "site": "youtube",

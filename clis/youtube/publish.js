@@ -1,304 +1,296 @@
+/**
+ * YouTube publish — Playwright connectOverCDP。
+ * 控件一律用 id / 组件名 / 固定顺序，不靠界面文案（语言会变）。
+ * 观众：ytkc-made-for-kids-select 第 2 项 = 非儿童；公开范围：visibility 第 3 项 = Public。
+ */
 import { cli, Strategy } from '@jackwener/opencli/registry';
 import { CommandExecutionError } from '@jackwener/opencli/errors';
 import { log } from '@jackwener/opencli/logger';
 import {
-  COLUMNS,
+  STATUS_COLUMNS,
   PHASE,
   resolveContent,
   normalizeMediaFiles,
-  requireLogin,
   buildArgs,
-  row,
-  step,
-  humanWait,
-  waitFor,
-  gotoWithRetry,
-  attachMedia,
-  publishFinish,
-  locateJs,
-  clickXpath,
-  clickWhenReady,
-  dismissOverlays,
-  resultProbeJs,
+  statusRow,
 } from '../shared/publish-helpers.js';
+import {
+  runPublishSession,
+  assertCookies,
+  humanWait,
+  randomWait,
+  step,
+  firstVisible,
+  mouseClickLocator,
+} from '../shared/pw-session.js';
 
 const ENTRY_URL = 'https://studio.youtube.com';
-// 标题超出上限时自动截断并在尾部补 '...'：YouTube 标题上限 100，故正文留 97 个字。
-const TITLE_MAX = 97;
-const ID_PATTERN = /[?&]v=([^&#]+)/;
 const SITE_HINT = 'YouTube UI may have changed — re-check the upload dialog semantic selectors';
 
 const X = {
-  entry: [
-    '//*[@id="upload-icon"]',
-    '//ytcp-icon-button[@id="upload-icon"]',
-  ],
-  menuItem: [
-    '//a[contains(@href, "/upload")]',
-    '//tp-yt-paper-icon-item[.//*[contains(@href, "/upload")]]',
-  ],
-  fileInput: [
-    '//ytcp-uploads-dialog//input[@type="file"]',
-    '//input[@type="file"]',
-  ],
-  editor: [
-    '//ytcp-uploads-dialog//div[@role="textbox"]',
-    '//div[@role="textbox"]',
-  ],
-  nextBtn: [
-    '//*[@id="next-button"]',
-    '//ytcp-uploads-dialog//ytcp-button[@id="next-button"]',
-  ],
-  publishBtn: [
-    '//*[@id="done-button"]',
-    '//ytcp-uploads-dialog//ytcp-button[@id="done-button"]',
-  ],
-  closeBtn: [
-    '//ytcp-uploads-still-processing-dialog//*[@id="close-button"]',
-    '//tp-yt-paper-dialog//*[@id="close-button"]',
-    '//tp-yt-paper-dialog//*[@id="close-icon-button"]',
-  ],
-  kidsNo: [
-    '//ytkc-made-for-kids-select//tp-yt-paper-radio-button[2]',
-  ],
-  visibilityPublic: [
-    '//ytcp-video-visibility-select//tp-yt-paper-radio-button[3]',
-  ],
+  entry: ['//*[@id="upload-icon"]'],
+  fileInput: ['//ytcp-uploads-dialog//input[@type="file"]', '//input[@type="file"]'],
+  nextBtn: ['//*[@id="next-button"]'],
+  publishBtn: ['//*[@id="done-button"]'],
+  /** 0=Yes kids, 1=No kids */
+  kidsNo: ['//ytkc-made-for-kids-select//tp-yt-paper-radio-button[2]'],
+  /** 0=Private, 1=Unlisted, 2=Public */
+  visibilityPublic: ['//ytcp-video-visibility-select//tp-yt-paper-radio-button[3]'],
 };
 
-const DIALOG_PROBE = `(() => ({ ok: !!document.querySelector('ytcp-uploads-dialog') }))()`;
+/** @param {import('playwright-core').Locator} loc */
+async function isEnabledLoc(loc) {
+  if (!(await loc.isVisible().catch(() => false))) return false;
+  if ((await loc.getAttribute('aria-disabled').catch(() => null)) === 'true') return false;
+  if (await loc.evaluate((el) => el.hasAttribute('disabled')).catch(() => true)) return false;
+  return true;
+}
 
-// 上传对话框内的字数超限检查。上限由字段自身决定（页面计数 used/max），CLI 不写死任何限制：
-// 扫描对话框内形如 "used/max" 的叶子计数文本，used > max 即超限；字段名从祖先节点的
-// 稳定 id（#title-textarea / #description-textarea）判定，语言无关。
-const OVER_LIMIT_PROBE = `(() => {
-  const vis = el => { const st = getComputedStyle(el); const r = el.getBoundingClientRect(); return st.display !== 'none' && st.visibility !== 'hidden' && r.width > 0 && r.height > 0; };
-  const dlg = document.querySelector('ytcp-uploads-dialog');
-  if (!dlg) return { ok: true };
-  const out = [];
-  const seen = new Set();
-  for (const el of dlg.querySelectorAll('*')) {
-    if (!vis(el) || el.childElementCount > 0) continue;
-    const t = (el.textContent || '').trim();
-    const m = t.match(/^(\\d[\\d,]*)\\s*\\/\\s*(\\d[\\d,]*)$/);
-    if (!m) continue;
-    const used = Number(m[1].replace(/,/g, ''));
-    const max = Number(m[2].replace(/,/g, ''));
-    if (!(used > max)) continue;
-    let field = '';
-    for (let p = el; p && p !== dlg; p = p.parentElement) {
-      const pid = p.id || '';
-      if (/title/i.test(pid)) { field = 'title'; break; }
-      if (/description/i.test(pid)) { field = 'description'; break; }
+/** 等 #next-button 可点（观众题未答时会 disabled） */
+async function waitNextEnabled(dialog, page, timeoutMs = 20000) {
+  const next = dialog.locator('#next-button').first();
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await isEnabledLoc(next)) return next;
+    await page.waitForTimeout(400);
+  }
+  return next;
+}
+
+async function assertNoUploadLimit(page) {
+  const lim = await page.evaluate(() => {
+    const root = document.querySelector('ytcp-uploads-dialog') || document.body;
+    const t = String(root.innerText || root.textContent || '');
+    const re = /已达到每日上传数上限|每日上传.{0,16}上限|daily upload limit|upload limit reached/i;
+    const m = t.match(re);
+    if (!m) return null;
+    return t.slice(t.indexOf(m[0]), t.indexOf(m[0]) + 100).replace(/\s+/g, ' ').trim();
+  });
+  if (lim) {
+    throw new CommandExecutionError(`YouTube 拒绝上传：${lim}`, SITE_HINT);
+  }
+}
+
+/**
+ * 真发成功判定（不靠正文「发布」文案）：
+ * 1) 出现 ytcp-video-share-dialog（「视频发布时间 / 分享链接」）—— 点完 Publish 后的成功态
+ * 2) 或 uploads-dialog / #done-button 都已消失
+ * 上传对话框在分享层下面可能仍留在 DOM，不能只看 uploads-dialog。
+ */
+async function waitYouTubePublished(page, dialog, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const share = page.locator('ytcp-video-share-dialog').first();
+    if (await share.isVisible().catch(() => false)) {
+      log.status('· 已出现分享成功对话框');
+      // 点关闭（最后一个/带 close 的 button），不靠文案
+      let closeBtn = share.locator('#close-button').first();
+      if (!(await closeBtn.isVisible().catch(() => false))) {
+        closeBtn = share.locator('button').last();
+      }
+      if (await closeBtn.isVisible().catch(() => false)) {
+        await closeBtn.click({ force: true }).catch(() => {});
+        await page.waitForTimeout(500);
+      }
+      return true;
     }
-    const key = field + ':' + used + '/' + max;
-    if (!seen.has(key)) { seen.add(key); out.push({ field, used, max, over: used - max }); }
+
+    const uploadsGone = !(await page.locator('ytcp-uploads-dialog').first().isVisible().catch(() => false));
+    const doneVisible = await page.evaluate(() => {
+      const done = document.querySelector('ytcp-uploads-dialog #done-button');
+      if (!done || done.hasAttribute('hidden')) return false;
+      const r = done.getBoundingClientRect();
+      return r.width > 0 && r.height > 0;
+    }).catch(() => false);
+
+    if (uploadsGone && !doneVisible) return true;
+    // 仅当仍停在公开范围（done 可见）才继续等；其它中间态也继续轮询
+    await page.waitForTimeout(800);
   }
-  return out.length ? { ok: false, fields: out } : { ok: true };
-})()`;
 
-// 视频刚上传完时 Studio 会重新抢焦点，此时 Ctrl+A / insertText 可能整批丢失（实测偶发：
-// 同一段流程有时写入失败、重试即成功），所以清空与写入都按「做完就校验、不成功再来」
-// 的方式做，最多 3 轮。
-async function clearTextbox(bp, selector) {
-  await bp.evaluate(`(() => { const e = document.querySelector(${JSON.stringify(selector)}); if (e instanceof HTMLElement) e.focus(); })()`);
-  await bp.cdp('Input.dispatchKeyEvent', { type: 'keyDown', key: 'a', modifiers: 2, windowsVirtualKeyCode: 65 });
-  await bp.cdp('Input.dispatchKeyEvent', { type: 'keyUp', key: 'a', modifiers: 2, windowsVirtualKeyCode: 65 });
-  await bp.cdp('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Delete', windowsVirtualKeyCode: 46 });
-  await bp.cdp('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Delete', windowsVirtualKeyCode: 46 });
-}
+  const shareLeft = await page.locator('ytcp-video-share-dialog').isVisible().catch(() => false);
+  if (shareLeft) return true;
 
-// 站点内自包含的填写：清空 → insertText 一次 → 规范化校验（忽略空白/换行差异）。
-// 不用共享 fillEditor：它对 contenteditable 用 innerText 严格相等校验，Studio 标题框
-// 会吞掉 \n、innerText 对 <br> 也有规范化差异 → 校验误判失败 → 内部二次插入 → 内容翻倍
-// （历史 bug：标题 184/100 = 92×2）。
-async function fillTextbox(bp, selector, text) {
-  const sel = JSON.stringify(selector);
-  const focusJs = `(() => { const e = document.querySelector(${sel}); if (e instanceof HTMLElement) e.focus(); })()`;
-  const readJs = `(() => { const e = document.querySelector(${sel}); return e instanceof HTMLElement ? String(e.innerText || '') : null; })()`;
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    await clearTextbox(bp, selector);
-    await bp.wait({ time: 0.3 });
-    await bp.evaluate(focusJs);
-    await bp.insertText(text);
-    await bp.wait({ time: 0.5 });
-    const got = await bp.evaluate(readJs);
-    if (got != null && got.replace(/\s+/g, '') === text.replace(/\s+/g, '')) return;
-    log.verbose(`第 ${attempt} 次写入未生效，重试`);
-    await bp.wait({ time: 0.6 });
-  }
-  await throwUploadLimit(bp, `标题/描述未能写入输入框（${selector}）`);
-}
-
-const POST_DIALOG_PROBE = `(() => {
-  for (const x of ${JSON.stringify(X.closeBtn)}) {
-    const el = document.evaluate(x, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
-    if (!(el instanceof Element)) continue;
-    const r = el.getBoundingClientRect();
-    if (r.width > 0 && r.height > 0) return { ok: true };
-  }
-  return { ok: false };
-})()`;
-
-async function closePostPublishDialogs(bp, rounds = 3) {
-  for (let i = 1; i <= rounds; i++) {
-    try {
-      await waitFor(bp, POST_DIALOG_PROBE, 10000, '发布后弹窗', SITE_HINT);
-    } catch {
-      log.verbose('未出现发布后弹窗（或已全部关闭），无需处理');
-      return;
+  const stuckOnVisibility = await page.evaluate(() => {
+    const done = document.querySelector('ytcp-uploads-dialog #done-button');
+    if (!done || done.hasAttribute('hidden')) return false;
+    const share = document.querySelector('ytcp-video-share-dialog');
+    if (share) {
+      const r = share.getBoundingClientRect();
+      if (r.width > 0 && r.height > 0) return false;
     }
-    await clickWhenReady(bp, X.closeBtn, 15000, '关闭按钮', SITE_HINT);
-    log.status(`· 已关闭发布后弹窗（第 ${i} 个）`);
-    await humanWait(bp, 1.2, 2.4);
+    const r = done.getBoundingClientRect();
+    return r.width > 0 && r.height > 0;
+  }).catch(() => false);
+  if (stuckOnVisibility) {
+    throw new CommandExecutionError(
+      'YouTube 仍停在公开范围（#done-button 可见），发布未真正点击成功',
+      SITE_HINT,
+    );
   }
-}
-
-async function openUploadDialog(bp) {
-  // 每日上传次数达到上限时，入口点了也弹不出对话框/菜单，先识别这种状态给出明确报错。
-  // 只在「该出现的没出现」的失败路径里查页面文案，不影响正常流程。
-  const pre = await uploadLimitError(bp);
-  if (pre) throw pre;
-  await clickWhenReady(bp, X.entry, 30000, '上传入口', SITE_HINT);
-  try {
-    await waitFor(bp, DIALOG_PROBE, 20000, '上传对话框', SITE_HINT);
-    return;
-  } catch {
-    log.verbose('入口未直接打开对话框，尝试点击上传菜单项');
-  }
-  try {
-    await clickWhenReady(bp, X.menuItem, 15000, '上传视频菜单项', SITE_HINT);
-    await waitFor(bp, DIALOG_PROBE, 30000, '上传对话框', SITE_HINT);
-  } catch (err) {
-    const le = await uploadLimitError(bp);
-    if (le) throw le;
-    throw err;
-  }
-}
-
-// 页面文案里找「每日/上传上限」相关提示（中英文都覆盖），命中返回明确错误对象。
-// 只在失败路径调用，不影响正常流程。
-const UPLOAD_LIMIT_PROBE = `(() => {
-  const t = String(document.body?.innerText || '');
-  const m = t.match(/[^\\n]{0,60}(daily upload limit|uploads? limit|上传次数.{0,12}上限|每日上传|达到.{0,8}上限)[^\\n]{0,60}/i);
-  return m ? { ok: true, text: m[0].trim().slice(0, 140) } : { ok: false };
-})()`;
-
-async function uploadLimitError(bp) {
-  const lim = await bp.evaluate(UPLOAD_LIMIT_PROBE).catch(() => null);
-  if (!lim?.ok) return null;
-  return new CommandExecutionError(
-    `YouTube 拒绝上传：页面提示「${lim.text}」（可能已达到每日上传次数上限，次日重置后再试）`,
-    'Daily upload limits reset at midnight Pacific Time (UTC-8)',
-  );
-}
-
-async function throwUploadLimit(bp, fallbackMessage) {
-  const le = await uploadLimitError(bp);
-  if (le) throw le;
-  throw new CommandExecutionError(fallbackMessage, SITE_HINT);
-}
-
-async function applySettings(bp) {
-  const kids = await clickXpath(bp, X.kidsNo);
-  log.status(kids?.ok ? '· 已设置"非儿童内容"' : '· 未找到儿童内容选项，跳过');
-  for (let i = 1; i <= 3; i++) {
-    if ((await bp.evaluate(DIALOG_PROBE)) && (await bp.evaluate(`(() => ({ ok: !!document.querySelector('ytcp-video-visibility-select') }))()`))?.ok) break;
-    try {
-      await clickWhenReady(bp, X.nextBtn, 30000, `继续（第 ${i} 步）`, SITE_HINT);
-      log.status(`· 已点击继续（第 ${i} 步）`);
-      await humanWait(bp, 1.5, 3);
-    } catch { break; }
-  }
-  const pub = await clickXpath(bp, X.visibilityPublic);
-  log.status(pub?.ok ? '· 已设置公开范围：公开' : '· 未找到公开范围选项，跳过');
+  throw new CommandExecutionError('publish step timed out: 发布结果', SITE_HINT);
 }
 
 cli({
   site: 'youtube',
   name: 'publish',
   access: 'write',
-  description: 'Upload a video with a title/description to YouTube',
-  domain: 'www.youtube.com',
+  description: 'Upload a video to YouTube Studio (Playwright + CDP endpoint)',
+  domain: 'studio.youtube.com',
   strategy: Strategy.UI,
-  browser: true,
-  siteSession: 'persistent',
-  defaultWindowMode: 'foreground',
-  args: buildArgs({ media: 'video', timeout: 300, requiredMedia: true }),
-  columns: COLUMNS,
-  func: async (page, kwargs) => {
-    const bp = page;
-    if (!bp) throw new CommandExecutionError('Browser session required for youtube publish');
-    await requireLogin(bp, 'https://www.youtube.com', ['SID', 'SAPISID', '__Secure-1PSID'], 'www.youtube.com');
-    log.status('已登录，开始整理发布内容');
+  browser: false,
+  args: buildArgs({ media: 'video', timeout: 600, requiredMedia: true }),
+  columns: STATUS_COLUMNS,
+  func: async (kwargs) => {
     const content = resolveContent({ text: kwargs.text, file: kwargs.file });
     const { videos } = normalizeMediaFiles({ videos: kwargs.videos, maxVideos: 1, site: 'youtube' });
     const video = videos[0];
-    const timeout = Number(kwargs.timeout) || 300;
+    const timeout = Number(kwargs.timeout) || 600;
     const dryRun = Boolean(kwargs['dry-run'] ?? kwargs.dryRun);
     log.status(`内容 ${content.length} 字，视频 1 个${dryRun ? '（dry-run）' : ''}`);
 
-    await step(bp, PHASE.open, () => gotoWithRetry(bp, ENTRY_URL), 2.4, 4.8);
-    await step(bp, PHASE.overlay, () => dismissOverlays(bp, 2), 0.8, 1.6);
-    await step(bp, PHASE.entry, () => openUploadDialog(bp), 1.5, 3);
+    return runPublishSession({
+      entryUrl: ENTRY_URL,
+      fn: async ({ page, context }) => {
+        await assertCookies(context, 'https://www.youtube.com', ['SID', 'HSID', 'SSID', 'LOGIN_INFO'], 'YouTube');
+        log.status('已登录，开始整理发布内容');
+        await humanWait(page, 0.8, 1.4);
 
-    log.verbose('该站需先上传媒体才会出现文案框，故媒体步骤先于编辑框步骤');
-    await step(bp, PHASE.media, () => attachMedia(bp, {
-      files: [video],
-      fileInputXpaths: X.fileInput,
-      acceptHint: 'video',
-      readyProbeJs: locateJs(X.editor, { mode: 'exists' }),
-      readyTimeoutMs: 60000,
-      label: '视频',
-      hint: SITE_HINT,
-    }), 2.4, 4.8);
-    log.status('已选择视频文件，等待上传初始化');
+        await step(page, PHASE.open, () => page.goto(ENTRY_URL, { waitUntil: 'domcontentloaded', timeout: 180000 }), 2.4, 4.0);
 
-    const boxes = await step(bp, PHASE.editor, () => waitFor(bp, locateJs(X.editor, { mode: 'all', attrPrefix: 'data-opencli-yt-box' }), 60000, '标题/描述输入框', SITE_HINT), 1.5, 3);
-    log.status(`已定位输入框（${boxes.count} 个）`);
+        await step(page, PHASE.entry, async () => {
+          const upload = await firstVisible(page, ['#upload-icon', 'ytcp-icon-button#upload-icon'], 60000);
+          if (!upload) throw new CommandExecutionError('上传入口 not found', SITE_HINT);
+          await mouseClickLocator(page, upload);
+          await humanWait(page, 1.0, 1.8);
+          // 下拉项：优先 href，不用文案
+          const menu = page.locator('a[href*="/upload"]').first();
+          if (await menu.isVisible().catch(() => false)) {
+            await mouseClickLocator(page, menu);
+            await humanWait(page, 1.2, 2.0);
+          }
+        }, 1.5, 2.5);
 
-    if (content) {
-      const truncated = content.length > TITLE_MAX;
-      const title = truncated ? content.slice(0, TITLE_MAX) + '...' : content;
-      if (truncated) log.status(`标题 ${content.length} 字超出上限，已截断为 ${title.length} 字（尾部补 ...）`);
-      await step(bp, PHASE.text, async () => {
-        await fillTextbox(bp, boxes.selectors[0], title);
-        if (boxes.count > 1) await fillTextbox(bp, boxes.selectors[boxes.count - 1], content);
-        await humanWait(bp, 0.6, 1.2);
-        const st = await bp.evaluate(OVER_LIMIT_PROBE).catch(() => ({ ok: true }));
-        if (!st.ok) {
-          const f = st.fields[0];
-          const name = f.field === 'title' ? '标题' : f.field === 'description' ? '描述' : (f.field || '字段');
-          throw new CommandExecutionError(
-            `YouTube 拒绝继续：${name}超出字符限制（页面计数 ${f.used}/${f.max}，超出 ${f.over} 字），请精简后重试`,
-            'The limit is shown by the page counter — shorten the text or check the account plan',
-          );
+        const dialog = page.locator('ytcp-uploads-dialog').first();
+        await step(page, PHASE.media, async () => {
+          await dialog.waitFor({ state: 'visible', timeout: 60000 }).catch(() => {});
+          const input = page.locator('ytcp-uploads-dialog input[type="file"], input[type="file"]').first();
+          if (await input.count()) {
+            await input.setInputFiles(video);
+          } else {
+            const chooserP = page.waitForEvent('filechooser', { timeout: 30000 });
+            // 无 file input 时点对话框内第一个可见 ytcp-button（选择文件）
+            const pick = dialog.locator('#select-files-button, ytcp-button').first();
+            await mouseClickLocator(page, pick);
+            await (await chooserP).setFiles(video);
+          }
+          log.status('· 视频已选择');
+          await page.locator('ytcp-uploads-dialog [role="textbox"]').first()
+            .waitFor({ state: 'visible', timeout: 180000 });
+          await assertNoUploadLimit(page);
+        }, 2.4, 4.0);
+
+        await step(page, PHASE.text, async () => {
+          const boxes = dialog.locator('[role="textbox"]');
+          const n = await boxes.count();
+          if (n >= 1 && content) {
+            const title = content.length > 90 ? `${content.slice(0, 90)}...` : content;
+            await boxes.nth(0).click({ force: true });
+            await page.keyboard.press('Control+a');
+            await boxes.nth(0).fill(title);
+          }
+          if (n >= 2 && content) {
+            await boxes.nth(1).click({ force: true });
+            await boxes.nth(1).fill(content);
+          }
+          log.status(`· 已填入标题/描述`);
+        }, 1.5, 2.8);
+
+        await step(page, PHASE.settings, async () => {
+          // 固定顺序：第 0=是儿童，第 1=非儿童（与语言无关）
+          const kidsNo = dialog.locator('ytkc-made-for-kids-select tp-yt-paper-radio-button').nth(1);
+          if (await kidsNo.isVisible().catch(() => false)) {
+            await kidsNo.scrollIntoViewIfNeeded().catch(() => {});
+            await mouseClickLocator(page, kidsNo).catch(() => kidsNo.click({ force: true }));
+            log.status('· 已选非面向儿童（kids radio #2）');
+            await humanWait(page, 0.8, 1.4);
+          }
+
+          const next = dialog.locator('#next-button').first();
+          // 点 #next-button 推进到公开范围（最多 4 步）
+          for (let i = 0; i < 4; i++) {
+            const done = dialog.locator('#done-button').first();
+            const doneHidden = await done.evaluate((el) => el.hasAttribute('hidden')).catch(() => true);
+            if (!doneHidden && await done.isVisible().catch(() => false)) break;
+
+            if (!(await isEnabledLoc(next))) {
+              // next 仍 disabled：再点一次非儿童并等待启用
+              if (await kidsNo.isVisible().catch(() => false)) {
+                await kidsNo.click({ force: true }).catch(() => {});
+                await humanWait(page, 0.5, 0.9);
+              }
+              await waitNextEnabled(dialog, page, 20000);
+            }
+            if (!(await isEnabledLoc(next))) break;
+
+            await mouseClickLocator(page, next).catch(() => next.click({ force: true }));
+            log.status(`· 已点 next #${i + 1}`);
+            await humanWait(page, 1.5, 2.5);
+          }
+
+          // 固定顺序：0=Private 1=Unlisted 2=Public
+          const vis = dialog.locator('ytcp-video-visibility-select tp-yt-paper-radio-button').nth(2);
+          await vis.waitFor({ state: 'visible', timeout: 30000 });
+          await vis.scrollIntoViewIfNeeded().catch(() => {});
+          await mouseClickLocator(page, vis).catch(() => vis.click({ force: true }));
+          await humanWait(page, 0.6, 1.0);
+          log.status('· 已选公开（visibility radio #3）');
+        }, 2.0, 3.5);
+
+        const pub = await step(page, PHASE.publish, async () => {
+          await assertNoUploadLimit(page);
+          const btn = dialog.locator('#done-button').first();
+          const next = dialog.locator('#next-button').first();
+          // 等到 #done-button 非 hidden（公开范围步）
+          const deadline = Date.now() + 90000;
+          while (Date.now() < deadline) {
+            const hidden = await btn.evaluate((el) => el.hasAttribute('hidden')).catch(() => true);
+            if (!hidden && await btn.isVisible().catch(() => false)) break;
+            if (await isEnabledLoc(next)) {
+              await next.click({ force: true }).catch(() => {});
+              await humanWait(page, 1.0, 1.6);
+            } else {
+              await page.waitForTimeout(500);
+            }
+          }
+          await btn.waitFor({ state: 'visible', timeout: 15000 });
+          const box = await btn.boundingBox().catch(() => null);
+          log.status(`· 已定位 #done-button` + (box ? ` @${Math.round(box.x)},${Math.round(box.y)}` : ''));
+          return { loc: btn, label: 'done' };
+        }, 1.2, 2.0);
+
+        if (dryRun) {
+          log.status('dry-run：已定位 #done-button，跳过点击');
+          return statusRow('dry_run');
         }
-      }, 1.5, 3);
-    }
-    await step(bp, PHASE.settings, () => applySettings(bp), 1.5, 3);
-    if (dryRun) {
-      log.status('dry-run 完成，跳过发布按钮');
-      return row('dry_run');
-    }
-    await step(bp, PHASE.publish, () => clickWhenReady(bp, X.publishBtn, 120000, '发布按钮', SITE_HINT), 1.5, 3);
-    const out = await publishFinish(bp, {
-      probeJs: resultProbeJs({
-        goneSelector: 'ytcp-uploads-dialog',
-        urlPattern: 'watch\\?v=',
-        texts: ['video published', '视频已发布', '已发布'],
-      }),
-      timeoutMs: timeout * 1000,
-      hint: SITE_HINT,
-      idPattern: ID_PATTERN,
+
+        // ytcp-button 内层 button 才吃点击；禁止用 Processing 等正文误判成功
+        await pub.loc.scrollIntoViewIfNeeded();
+        const inner = pub.loc.locator('button').first();
+        if (await inner.count()) {
+          await inner.click({ force: true });
+        } else {
+          await mouseClickLocator(page, pub.loc, '#done-button');
+        }
+        log.status('· 已点击 #done-button');
+        await humanWait(page, 2.0, 3.5);
+
+        await step(page, PHASE.result, () => waitYouTubePublished(page, dialog, Math.max(120000, timeout * 1000)), 1.0, 1.8);
+        log.status('已发布');
+        return statusRow('published');
+      },
     });
-    await step(bp, '· 关闭发布后弹窗', () => closePostPublishDialogs(bp), 1.2, 2.4);
-    return out;
   },
 });
 
-export const __test__ = {
-  resolveContent,
-  normalizeMediaFiles,
-  X,
-};
+export const __test__ = { resolveContent, normalizeMediaFiles, X };
