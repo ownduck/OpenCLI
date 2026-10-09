@@ -1,6 +1,6 @@
 {
   "name": "@woosau/opencli",
-  "version": "1.8.8-261008.5",
+  "version": "1.8.8-261009.4",
   "publishConfig": {
     "access": "public"
   },
@@ -80,7 +80,6 @@
     "url": "git+https://github.com/ownduck/OpenCLI.git"
   },
   "dependencies": {
-    "@jackwener/opencli": "file:.",
     "@mozilla/readability": "^0.6.0",
     "cli-table3": "^0.6.5",
     "commander": "^14.0.3",
@@ -92,6 +91,7 @@
     "ws": "^8.18.0"
   },
   "devDependencies": {
+    "@jackwener/opencli": "file:.",
     "@types/js-yaml": "^4.0.9",
     "@types/jsdom": "^27.0.0",
     "@types/node": "^25.5.2",

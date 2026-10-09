@@ -21,7 +21,6 @@ import { getAllElectronApps } from '../electron-apps.js';
 import { CDPBasePage } from './base-page.js';
 
 export interface CDPTarget {
-  id?: string;
   type?: string;
   url?: string;
   title?: string;
@@ -54,17 +53,6 @@ export class CDPBridge implements IBrowserFactory {
   private _idCounter = 0;
   private _pending = new Map<number, { resolve: (val: unknown) => void; reject: (err: Error) => void; timer: ReturnType<typeof setTimeout> }>();
   private _eventListeners = new Map<string, Set<(params: unknown) => void>>();
-  /** HTTP DevTools base (`http://host:port`) when connected via /json; null for raw ws://. */
-  private _httpEndpoint: string | null = null;
-  private _targetId: string | undefined;
-
-  get httpEndpoint(): string | null {
-    return this._httpEndpoint;
-  }
-
-  get targetId(): string | undefined {
-    return this._targetId;
-  }
 
   async connect(opts?: { timeout?: number; session?: string; cdpEndpoint?: string; contextId?: string; idleTimeout?: number; windowMode?: 'foreground' | 'background'; surface?: 'browser' | 'adapter'; siteSession?: 'ephemeral' | 'persistent' }): Promise<IPage> {
     if (this._ws) throw new Error('CDPBridge is already connected. Call close() before reconnecting.');
@@ -73,49 +61,18 @@ export class CDPBridge implements IBrowserFactory {
     if (!endpoint) throw new Error('CDP endpoint not provided (pass cdpEndpoint or set OPENCLI_CDP_ENDPOINT)');
 
     let wsUrl = endpoint;
-    let targetId: string | undefined;
     if (endpoint.startsWith('http')) {
-      this._httpEndpoint = endpoint.replace(/\/$/, '');
-      const targets = await fetchJsonDirect(`${this._httpEndpoint}/json`) as CDPTarget[];
+      const targets = await fetchJsonDirect(`${endpoint.replace(/\/$/, '')}/json`) as CDPTarget[];
       const target = selectCDPTarget(targets);
       if (!target || !target.webSocketDebuggerUrl) {
         throw new Error('No inspectable targets found at CDP endpoint');
       }
       wsUrl = target.webSocketDebuggerUrl;
-      targetId = typeof target.id === 'string' ? target.id : undefined;
-    } else {
-      this._httpEndpoint = null;
     }
 
-    await this.openWebSocket(wsUrl, opts?.timeout ?? 10);
-    this._targetId = targetId;
-    return new CDPPage(this);
-  }
-
-  /**
-   * Move the single page WebSocket onto another target (HTTP /json mode).
-   * Rejects in-flight commands on the old socket, then enables Page + stealth on the new one.
-   */
-  async switchTarget(wsUrl: string, targetId?: string): Promise<void> {
-    await this.openWebSocket(wsUrl, 10);
-    this._targetId = targetId;
-  }
-
-  private async openWebSocket(wsUrl: string, timeoutSec: number): Promise<void> {
-    if (this._ws) {
-      const old = this._ws;
-      this._ws = null;
-      for (const p of this._pending.values()) {
-        clearTimeout(p.timer);
-        p.reject(new Error('CDP target switched'));
-      }
-      this._pending.clear();
-      try { old.close(); } catch { /* ignore */ }
-    }
-
-    await new Promise<void>((resolve, reject) => {
+    return new Promise((resolve, reject) => {
       const ws = new WebSocket(wsUrl);
-      const timeoutMs = timeoutSec * 1000;
+      const timeoutMs = (opts?.timeout ?? 10) * 1000;
       const timeout = setTimeout(() => {
         this._ws = null;
         ws.close();
@@ -129,12 +86,11 @@ export class CDPBridge implements IBrowserFactory {
           await this.send('Page.enable');
           await this.send('Page.addScriptToEvaluateOnNewDocument', { source: generateStealthJs() });
         } catch (err) {
-          this._ws = null;
           ws.close();
           reject(err instanceof Error ? err : new Error(String(err)));
           return;
         }
-        resolve();
+        resolve(new CDPPage(this));
       });
 
       ws.on('error', (err: Error) => {
@@ -176,8 +132,6 @@ export class CDPBridge implements IBrowserFactory {
       this._ws.close();
       this._ws = null;
     }
-    this._httpEndpoint = null;
-    this._targetId = undefined;
     for (const p of this._pending.values()) {
       clearTimeout(p.timer);
       p.reject(new Error('CDP connection closed'));
@@ -232,8 +186,6 @@ export class CDPBridge implements IBrowserFactory {
 
 class CDPPage extends CDPBasePage {
   private _pageEnabled = false;
-  /** Target to restore after closing the active publish/automation tab. */
-  private _previousTargetId: string | undefined;
 
   // Network capture state (mirrors extension/src/cdp.ts NetworkCaptureEntry shape)
   private _networkCapturing = false;
@@ -494,105 +446,11 @@ class CDPPage extends CDPBasePage {
   }
 
   async tabs(): Promise<unknown[]> {
-    const list = await this.listPageTargets();
-    return list.map((t, index) => ({
-      index,
-      id: t.id,
-      page: t.id,
-      url: t.url ?? '',
-      title: t.title ?? '',
-      type: t.type ?? 'page',
-      active: t.id !== undefined && t.id === this.bridge.targetId,
-    }));
+    return [];
   }
 
-  /**
-   * Open a new tab via DevTools HTTP `/json/new` (Chrome ≥111: PUT).
-   * Does not adopt the tab — caller must `selectTab` (same as Bridge Page).
-   */
-  async newTab(url?: string): Promise<string | undefined> {
-    const http = this.bridge.httpEndpoint;
-    if (!http) {
-      throw new Error('CDP newTab requires an http(s) DevTools endpoint (e.g. --cdp-endpoint=http://127.0.0.1:9222)');
-    }
-    const created = await openCdpTarget(http, url);
-    if (!created?.id) throw new Error('CDP /json/new did not return a target id');
-    return created.id;
-  }
-
-  async selectTab(target: number | string): Promise<void> {
-    const info = await this.resolveTarget(target);
-    if (!info.webSocketDebuggerUrl) {
-      throw new Error(`CDP target ${info.id ?? target} has no webSocketDebuggerUrl`);
-    }
-    const http = this.bridge.httpEndpoint;
-    if (http && info.id) {
-      await cdpHttpCall(`${http}/json/activate/${encodeURIComponent(info.id)}`).catch(() => {});
-    }
-    const current = this.bridge.targetId;
-    if (current && info.id && current !== info.id) {
-      this._previousTargetId = current;
-    }
-    await this.bridge.switchTarget(info.webSocketDebuggerUrl, info.id);
-    this._pageEnabled = false;
-    this._lastUrl = null;
-  }
-
-  async closeTab(target?: number | string): Promise<void> {
-    const http = this.bridge.httpEndpoint;
-    if (!http) {
-      throw new Error('CDP closeTab requires an http(s) DevTools endpoint');
-    }
-    const key = target !== undefined ? target : this.bridge.targetId;
-    if (key === undefined || key === '') {
-      throw new Error('CDP closeTab: no active target');
-    }
-    const info = await this.resolveTarget(key);
-    const id = info.id;
-    if (!id) throw new Error('CDP closeTab: target id unavailable');
-    const wasActive = id === this.bridge.targetId;
-    await cdpHttpCall(`${http}/json/close/${encodeURIComponent(id)}`);
-    if (!wasActive) return;
-
-    const fallbackId = this._previousTargetId && this._previousTargetId !== id
-      ? this._previousTargetId
-      : undefined;
-    this._previousTargetId = undefined;
-
-    const remaining = await this.listPageTargets();
-    const fallback = (fallbackId ? remaining.find(t => t.id === fallbackId) : undefined) ?? remaining[0];
-    if (fallback?.webSocketDebuggerUrl) {
-      if (fallback.id) {
-        await cdpHttpCall(`${http}/json/activate/${encodeURIComponent(fallback.id)}`).catch(() => {});
-      }
-      await this.bridge.switchTarget(fallback.webSocketDebuggerUrl, fallback.id);
-      this._pageEnabled = false;
-      this._lastUrl = null;
-    }
-  }
-
-  private async listPageTargets(): Promise<CDPTarget[]> {
-    const http = this.bridge.httpEndpoint;
-    if (!http) return [];
-    const targets = await fetchJsonDirect(`${http}/json`) as CDPTarget[];
-    if (!Array.isArray(targets)) return [];
-    return targets.filter(t => {
-      const type = (t.type ?? '').toLowerCase();
-      return !!t.webSocketDebuggerUrl && (type === '' || type === 'page' || type === 'app' || type === 'webview');
-    });
-  }
-
-  private async resolveTarget(target: number | string): Promise<CDPTarget> {
-    const list = await this.listPageTargets();
-    if (typeof target === 'number') {
-      const hit = list[target];
-      if (!hit) throw new Error(`CDP tab index out of range: ${target}`);
-      return hit;
-    }
-    if (!target) throw new Error('CDP tab target is empty');
-    const hit = list.find(t => t.id === target);
-    if (!hit) throw new Error(`CDP tab not found: ${target}`);
-    return hit;
+  async selectTab(_target: number | string): Promise<void> {
+    // Not supported in direct CDP mode
   }
 
   async cdp(method: string, params: Record<string, unknown> = {}): Promise<unknown> {
@@ -732,55 +590,32 @@ function escapeRegExp(value: string): string {
 export const __test__ = {
   selectCDPTarget,
   scoreCDPTarget,
-  openCdpTarget,
 };
 
 function fetchJsonDirect(url: string): Promise<unknown> {
-  return cdpHttpCall(url, 'GET').then((body) => {
-    if (body === '') throw new Error('Empty CDP HTTP response');
-    return JSON.parse(body) as unknown;
-  });
-}
-
-/** Chrome DevTools HTTP helper. `/json/activate` and `/json/close` often return a bare string. */
-function cdpHttpCall(url: string, method: 'GET' | 'PUT' = 'GET'): Promise<string> {
   return new Promise((resolve, reject) => {
     const parsed = new URL(url);
-    const request = (parsed.protocol === 'https:' ? httpsRequest : httpRequest)(parsed, { method }, (res) => {
+    const request = (parsed.protocol === 'https:' ? httpsRequest : httpRequest)(parsed, (res) => {
       const statusCode = res.statusCode ?? 0;
+      if (statusCode < 200 || statusCode >= 300) {
+        res.resume();
+        reject(new Error(`Failed to fetch CDP targets: HTTP ${statusCode}`));
+        return;
+      }
+
       const chunks: Buffer[] = [];
       res.on('data', (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
       res.on('end', () => {
-        const body = Buffer.concat(chunks).toString('utf8');
-        if (statusCode < 200 || statusCode >= 300) {
-          reject(new Error(`CDP HTTP ${method} ${parsed.pathname} failed: ${statusCode}${body ? ` ${body.slice(0, 200)}` : ''}`));
-          return;
+        try {
+          resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')));
+        } catch (error) {
+          reject(error instanceof Error ? error : new Error(String(error)));
         }
-        resolve(body);
       });
     });
 
     request.on('error', reject);
-    request.setTimeout(10_000, () => request.destroy(new Error(`Timed out CDP HTTP ${method} ${parsed.pathname}`)));
+    request.setTimeout(10_000, () => request.destroy(new Error('Timed out fetching CDP targets')));
     request.end();
   });
-}
-
-/**
- * Open a tab via `/json/new`. Chrome ≥111 requires PUT; older forks may still accept GET.
- */
-async function openCdpTarget(httpEndpoint: string, url?: string): Promise<CDPTarget> {
-  const path = url ? `/json/new?${encodeURIComponent(url)}` : '/json/new';
-  const full = `${httpEndpoint}${path}`;
-  let body: string;
-  try {
-    body = await cdpHttpCall(full, 'PUT');
-  } catch {
-    body = await cdpHttpCall(full, 'GET');
-  }
-  const parsed = JSON.parse(body) as CDPTarget;
-  if (!parsed?.webSocketDebuggerUrl && !parsed?.id) {
-    throw new Error(`Unexpected /json/new response: ${body.slice(0, 200)}`);
-  }
-  return parsed;
 }

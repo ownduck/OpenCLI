@@ -60,24 +60,32 @@ async function dialogHeaderRightButton(dialog) {
 }
 
 async function openCreateDialog(page) {
-  // 优先稳定 href，不靠 aria-label 文案
-  const target = await firstVisible(page, ['a[href*="/create/"]'], 90000);
-  if (!target) throw new CommandExecutionError('创建入口 not found', SITE_HINT);
-  log.status('· 点击创建入口（/create/）');
-  await mouseClickLocator(page, target);
+  // 侧栏 Create（+）常无 /create/ href；对齐 vertaw instagram.cjs xpath
+  const createPostEnter = page.locator(
+    'xpath=/html/body/div[1]/div/div/div[2]/div/div/div[1]/div[1]/div[1]/div/div/div/div/div/div[2]/div/div[6]/div/span/div/a/div/div[1]/div',
+  );
+  await createPostEnter.waitFor({ state: 'visible', timeout: 120000 });
+  if ((await createPostEnter.count()) === 0) {
+    throw new CommandExecutionError('Create入口 not found', SITE_HINT);
+  }
+  log.status('· 点击侧栏 Create');
+  await createPostEnter.click({ force: true });
   await humanWait(page, 1.5, 2.8);
 
-  // 菜单若出现：点带 /create/ 的项
-  const menuLink = page.locator('[role="dialog"] a[href*="/create/"], [role="menu"] a[href*="/create/"]').first();
-  if (await menuLink.isVisible({ timeout: 4000 }).catch(() => false)) {
-    log.status('· 点击创建菜单项');
-    await mouseClickLocator(page, menuLink);
-    await humanWait(page, 1.8, 3.2);
+  // Create 下拉第一项 Post（对齐 vertaw instagram.cjs）
+  const addPostButton = page.locator(
+    'xpath=/html/body/div[1]/div/div/div[2]/div/div/div[1]/div[1]/div[1]/div/div/div/div/div/div[2]/div/div[6]/div/span/div/div/div/div[1]/a[1]/div/div',
+  );
+  if ((await addPostButton.count()) === 0) {
+    throw new CommandExecutionError('Create → Post 入口 not found', SITE_HINT);
   }
+  log.status('· 点击 Create → Post');
+  await addPostButton.click({ force: true });
+  await humanWait(page, 1.8, 3.2);
 
   const dialog = page.locator('[role="dialog"]').first();
   await dialog.waitFor({ state: 'visible', timeout: 90000 });
-  log.status('· 创建对话框已打开');
+  log.status('· Create对话框已打开');
   return dialog;
 }
 

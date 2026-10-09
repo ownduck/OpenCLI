@@ -1,2 +1,3 @@
 allowBuilds:
+  '@woosau/opencli@file:': false
   esbuild: true
