@@ -147,16 +147,19 @@ try {
     process.exit(EXIT_CODES.SUCCESS);
   }
 
-  // Preserve literal leading-dash adapter arguments; browser options are parsed by Commander.
-  const { escapeLeadingDashPositional } = await import('./cli-argv-preprocess.js');
+  // Preserve literal leading-dash adapter arguments; hoist root --cdp-endpoint;
+  // remaining browser options are parsed by Commander.
+  // (Do not name this `argv` — outer const argv is already in scope for fast paths.)
+  const { escapeLeadingDashPositional, hoistTrailingRootCdpEndpoint } = await import('./cli-argv-preprocess.js');
+  let processedArgv = hoistTrailingRootCdpEndpoint(process.argv.slice(2));
   try {
     const manifestPath = getCliManifestPath(BUILTIN_CLIS);
     if (fs.existsSync(manifestPath)) {
       const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
-      if (Array.isArray(manifest)) process.argv.splice(2, process.argv.length - 2,
-        ...escapeLeadingDashPositional(process.argv.slice(2), manifest));
+      if (Array.isArray(manifest)) processedArgv = escapeLeadingDashPositional(processedArgv, manifest);
     }
-  } catch { /* manifest unavailable; parse the original arguments */ }
+  } catch { /* manifest unavailable; keep hoist-only argv */ }
+  process.argv.splice(2, process.argv.length - 2, ...processedArgv);
 
   await emitHook('onStartup', { command: '__startup__', args: {} });
   await runCli(BUILTIN_CLIS, USER_CLIS);

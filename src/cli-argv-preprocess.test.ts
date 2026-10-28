@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { escapeLeadingDashPositional } from './cli-argv-preprocess.js';
+import { escapeLeadingDashPositional, hoistTrailingRootCdpEndpoint } from './cli-argv-preprocess.js';
 
 describe('escapeLeadingDashPositional', () => {
   const manifest = [
@@ -80,6 +80,11 @@ describe('escapeLeadingDashPositional', () => {
       .toEqual(['--profile', 'work', 'boss', 'detail', '--', '-abc']);
   });
 
+  it('works when --cdp-endpoint precedes the site', () => {
+    expect(escapeLeadingDashPositional(['--cdp-endpoint', 'http://127.0.0.1:9222', 'boss', 'detail', '-abc'], manifest))
+      .toEqual(['--cdp-endpoint', 'http://127.0.0.1:9222', 'boss', 'detail', '--', '-abc']);
+  });
+
   it('works for any adapter, not just boss', () => {
     expect(escapeLeadingDashPositional(['twitter', 'follow', '-someuser'], manifest))
       .toEqual(['twitter', 'follow', '--', '-someuser']);
@@ -93,5 +98,29 @@ describe('escapeLeadingDashPositional', () => {
   it('returns argv unchanged when argv is too short', () => {
     expect(escapeLeadingDashPositional(['boss'], manifest)).toEqual(['boss']);
     expect(escapeLeadingDashPositional(['boss', 'detail'], manifest)).toEqual(['boss', 'detail']);
+  });
+});
+
+describe('hoistTrailingRootCdpEndpoint', () => {
+  it('hoists a trailing --cdp-endpoint pair to the front', () => {
+    expect(hoistTrailingRootCdpEndpoint(['browser', 'state', '--session', 'work', '--cdp-endpoint', 'http://127.0.0.1:9688']))
+      .toEqual(['--cdp-endpoint', 'http://127.0.0.1:9688', 'browser', 'state', '--session', 'work']);
+  });
+
+  it('hoists a trailing --cdp-endpoint=value form', () => {
+    expect(hoistTrailingRootCdpEndpoint(['twitter', 'publish', '--cdp-endpoint=http://127.0.0.1:9688']))
+      .toEqual(['--cdp-endpoint=http://127.0.0.1:9688', 'twitter', 'publish']);
+  });
+
+  it('leaves argv unchanged when already leading or absent', () => {
+    expect(hoistTrailingRootCdpEndpoint(['--cdp-endpoint', 'http://127.0.0.1:9222', 'browser', 'state']))
+      .toEqual(['--cdp-endpoint', 'http://127.0.0.1:9222', 'browser', 'state']);
+    expect(hoistTrailingRootCdpEndpoint(['browser', 'state', '--session', 'work']))
+      .toEqual(['browser', 'state', '--session', 'work']);
+  });
+
+  it('does not hoist past --', () => {
+    expect(hoistTrailingRootCdpEndpoint(['boss', 'detail', '--', '--cdp-endpoint', 'http://127.0.0.1:9222']))
+      .toEqual(['boss', 'detail', '--', '--cdp-endpoint', 'http://127.0.0.1:9222']);
   });
 });

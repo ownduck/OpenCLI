@@ -10,7 +10,8 @@ export interface DashPositionalManifestEntry {
   browser?: boolean;
 }
 
-const ROOT_VALUE_FLAGS: ReadonlySet<string> = new Set(['--profile']);
+/** Keep in sync with `program.option(...)` value-taking flags in cli.ts. */
+const ROOT_VALUE_FLAGS: ReadonlySet<string> = new Set(['--profile', '--cdp-endpoint']);
 
 type OptionValueMode = 'none' | 'required' | 'optional';
 type OptionParse = { values: string[]; nextIndex: number };
@@ -140,4 +141,33 @@ export function escapeLeadingDashPositional(
     positional,
     ...trailingRest,
   ];
+}
+
+/**
+ * Move one trailing `--cdp-endpoint <url>` / `--cdp-endpoint=<url>` to the
+ * front of argv (root option slot). Stops at `--`. Mutates a copy.
+ *
+ * Needed because `--cdp-endpoint` is a root program option; trailing use such as
+ * `browser state --session work --cdp-endpoint http://127.0.0.1:9222` would
+ * otherwise be treated as an unknown leaf option.
+ */
+export function hoistTrailingRootCdpEndpoint(argv: readonly string[]): string[] {
+  const result = [...argv];
+  for (let i = 0; i < result.length; i += 1) {
+    const tok = result[i];
+    if (tok === '--') return result;
+    if (tok.startsWith('--cdp-endpoint=')) {
+      const removed = result.splice(i, 1);
+      result.unshift(...removed);
+      return result;
+    }
+    if (tok === '--cdp-endpoint') {
+      const value = result[i + 1];
+      if (value === undefined || value === '--') return result;
+      const removed = result.splice(i, 2);
+      result.unshift(...removed);
+      return result;
+    }
+  }
+  return result;
 }

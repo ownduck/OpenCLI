@@ -28,7 +28,7 @@ import * as os from 'node:os';
 import { executePipeline } from './pipeline/index.js';
 import { adapterLoadError, ArgumentError, CommandExecutionError, SessionBusyError, attachTraceReceipt, getErrorMessage } from './errors.js';
 import { shouldUseBrowserSession } from './capabilityRouting.js';
-import { getBrowserFactory, browserSession, runWithTimeout, DEFAULT_BROWSER_COMMAND_TIMEOUT, type BrowserWindowMode } from './runtime.js';
+import { getBrowserFactory, getConfiguredCdpEndpoint, browserSession, runWithTimeout, DEFAULT_BROWSER_COMMAND_TIMEOUT, type BrowserWindowMode } from './runtime.js';
 import { profileRouteParams, resolveProfileSelection } from './browser/profile.js';
 import { SLOT_WAIT_DEFAULT_MS, MAX_SLOT_DELAY_MS, parseSlotPolicy, type SlotPolicy } from './site-slots.js';
 import { acquireSiteSlot, clearDaemonRunContext, generateRunId, isUnknownOutcomeError, releaseSiteSessionLease, setDaemonCommandTimeoutSeconds, setDaemonRunContext } from './browser/daemon-client.js';
@@ -252,6 +252,7 @@ export async function executeCommand(
   let result: unknown;
   try {
     if (siteSession !== null) {
+      const cdpEndpoint = getConfiguredCdpEndpoint();
       const BrowserFactory = getBrowserFactory();
       // Requirement vs preference: --profile / OPENCLI_PROFILE route strictly;
       // the config default is a soft preference the daemon arbitrates.
@@ -429,7 +430,7 @@ export async function executeCommand(
           if (!keepTab) await page.closeWindow?.().catch(() => {});
           throw err;
         }
-      }, { session, ...profileRouting, windowMode, surface: 'adapter', siteSession });
+      }, { session, cdpEndpoint, ...profileRouting, windowMode, surface: 'adapter', siteSession });
       } catch (err) {
         browserRunError = err;
         throw err;

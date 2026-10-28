@@ -19,7 +19,7 @@ import { getAttributesResolvedJs, getTextResolvedJs, getValueResolvedJs, isAutoc
 import { EXIT_CODES, getErrorMessage } from '../errors.js';
 import { installCommanderNamespaceStructuredHelp } from '../help.js';
 import { log } from '../logger.js';
-import type { BrowserWindowMode } from '../runtime.js';
+import { applyCdpEndpointFromCli, getBrowserFactory, type BrowserWindowMode } from '../runtime.js';
 import type { BrowserDownloadWaitResult, IPage, ScreenshotOptions } from '../types.js';
 
 
@@ -263,9 +263,10 @@ async function getBrowserPage(
   targetPage?: string,
   profileSelection?: ProfileSelection,
   opts: { windowMode?: BrowserWindowMode } = {},
-): Promise<import('../types.js').IPage> {
-  const { BrowserBridge } = await import('../browser/index.js');
-  const bridge = new BrowserBridge();
+): Promise<{ page: import('../types.js').IPage; dispose: () => Promise<void> }> {
+  // OPENCLI_CDP_ENDPOINT / --cdp-endpoint → CDPBridge; otherwise BrowserBridge.
+  const BrowserFactory = getBrowserFactory();
+  const bridge = new BrowserFactory();
   // Internal GC timeout for browser sessions. Not the per-command runtime timeout.
   const envTimeout = process.env.OPENCLI_BROWSER_IDLE_TIMEOUT;
   const idleTimeout = envTimeout ? parseInt(envTimeout, 10) : undefined;
@@ -287,7 +288,9 @@ async function getBrowserPage(
     }
     page.setActivePage(resolvedTargetPage);
   }
-  return page;
+  // CDP keeps a live WebSocket; always dispose so the process can exit.
+  // BrowserBridge.close() only drops the local page ref (daemon stays up).
+  return { page, dispose: () => bridge.close().catch(() => {}) };
 }
 
 function getBrowserWindowMode(command: Command | undefined, defaultMode: BrowserWindowMode): BrowserWindowMode {
@@ -532,20 +535,25 @@ export function registerBrowserCommands(program: Command): Command {
   }
 
   /** Wrap browser actions with error handling and optional --json output */
-  function browserAction<Args extends unknown[]>(fn: (page: Awaited<ReturnType<typeof getBrowserPage>>, ...args: Args) => Promise<unknown>) {
+  function browserAction<Args extends unknown[]>(fn: (page: import('../types.js').IPage, ...args: Args) => Promise<unknown>) {
     return browserLifecycle(async (...args: Args) => {
-      let page: Awaited<ReturnType<typeof getBrowserPage>> | null = null;
+      let dispose: (() => Promise<void>) | null = null;
       try {
         const command = args.at(-1) instanceof Command ? args.at(-1) as Command : undefined;
+        const cdpEndpointOpt = getCommandOption(command, 'cdpEndpoint');
+        applyCdpEndpointFromCli(typeof cdpEndpointOpt === 'string' ? cdpEndpointOpt : undefined);
         const targetPage = getBrowserTargetId(command);
         const session = getBrowserSession(command);
         const profileSelection = getBrowserProfileSelection(command);
         const windowMode = getBrowserWindowMode(command, 'foreground');
-        page = await getBrowserPage(session, targetPage, profileSelection, { windowMode });
-        await fn(page, ...args);
+        const sessionHandle = await getBrowserPage(session, targetPage, profileSelection, { windowMode });
+        dispose = sessionHandle.dispose;
+        await fn(sessionHandle.page, ...args);
       } catch (err) {
         if (isJavaScriptDialogMessage(getErrorMessage(err))) emitJavaScriptDialogError(getErrorMessage(err));
         else emitFailure(err);
+      } finally {
+        if (dispose) await dispose();
       }
     });
   }
@@ -558,15 +566,18 @@ export function registerBrowserCommands(program: Command): Command {
   function browserSessionCommandAction(fn: (ctx: BrowserSessionCommandContext) => Promise<void>) {
     return browserLifecycle(async (optsOrCommand: unknown, maybeCommand?: Command) => {
       const command = optsOrCommand instanceof Command ? optsOrCommand : maybeCommand;
+      let bridge: InstanceType<ReturnType<typeof getBrowserFactory>> | null = null;
       try {
+        const cdpEndpointOpt = getCommandOption(command, 'cdpEndpoint');
+        applyCdpEndpointFromCli(typeof cdpEndpointOpt === 'string' ? cdpEndpointOpt : undefined);
         const session = getBrowserSession(command);
         const profileSelection = getBrowserProfileSelection(command);
         const contextId = profileSelection?.contextId;
-        const { BrowserBridge } = await import('../browser/index.js');
-        const bridge = new BrowserBridge();
+        bridge = new (getBrowserFactory())();
         await bridge.connect({ timeout: DEFAULT_BROWSER_CONNECT_TIMEOUT, session, surface: 'browser', ...profileRouteParams(profileSelection) });
         await fn({ session, contextId });
       } catch (err) { emitFailure(err); }
+      finally { if (bridge) await bridge.close().catch(() => {}); }
     });
   }
 

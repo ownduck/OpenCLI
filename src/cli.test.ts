@@ -29,11 +29,14 @@ const {
 
 vi.mock('./browser/index.js', () => {
   mockBrowserConnect.mockImplementation(async () => browserState.page as IPage);
+  // Same mock for both factories: --cdp-endpoint / OPENCLI_CDP_ENDPOINT selects CDPBridge.
+  const Bridge = class {
+    connect = mockBrowserConnect;
+    close = mockBrowserClose;
+  };
   return {
-    BrowserBridge: class {
-      connect = mockBrowserConnect;
-      close = mockBrowserClose;
-    },
+    BrowserBridge: Bridge,
+    CDPBridge: Bridge,
   };
 });
 
@@ -424,6 +427,11 @@ describe('createProgram root help descriptions', () => {
           flags: '--profile <name>',
           takes_value: 'required',
         }),
+        expect.objectContaining({
+          name: 'cdpEndpoint',
+          flags: '--cdp-endpoint <url>',
+          takes_value: 'required',
+        }),
       ]));
 
       const click = data.commands.find((cmd: any) => cmd.name === 'click');
@@ -548,7 +556,7 @@ describe('createProgram root help descriptions', () => {
         structured_help: { usage: 'opencli daemon --help -f json' },
       });
       expect(data.commands.map((cmd: any) => cmd.name)).toEqual(['restart', 'status', 'stop']);
-      expect(data.global_options.map((option: any) => option.name)).toEqual(expect.arrayContaining(['version', 'profile']));
+      expect(data.global_options.map((option: any) => option.name)).toEqual(expect.arrayContaining(['version', 'profile', 'cdpEndpoint']));
     } finally {
       process.argv = argv;
     }

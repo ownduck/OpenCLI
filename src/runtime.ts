@@ -5,6 +5,17 @@ import { DEFAULT_BROWSER_COMMAND_TIMEOUT, DEFAULT_BROWSER_CONNECT_TIMEOUT } from
 
 export { DEFAULT_BROWSER_COMMAND_TIMEOUT, DEFAULT_BROWSER_CONNECT_TIMEOUT };
 
+export function getConfiguredCdpEndpoint(): string | undefined {
+  const endpoint = process.env.OPENCLI_CDP_ENDPOINT?.trim();
+  return endpoint || undefined;
+}
+
+/** CLI --cdp-endpoint wins over pre-existing env for this process. */
+export function applyCdpEndpointFromCli(cliEndpoint?: string): void {
+  const v = cliEndpoint?.trim();
+  if (v) process.env.OPENCLI_CDP_ENDPOINT = v;
+}
+
 /**
  * Returns the appropriate browser factory based on explicit configuration.
  * A manual CDP endpoint uses CDPBridge; otherwise use BrowserBridge.
