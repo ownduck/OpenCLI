@@ -1,8 +1,8 @@
 @echo off
 setlocal
 cd /d "%~dp0"
-echo Temporary rename: @jackwener/opencli -^> @woosau/opencli
-echo Do NOT commit these changes. Restore with rename-to-jackwener.bat after publish.
+echo [Rename] @jackwener/opencli -^> @woosau/opencli
+echo Do NOT commit these changes. After publish, run restore-to-jackwener.bat.
 echo.
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\rename-package-scope.ps1" -Direction to-woosau
 set ERR=%ERRORLEVEL%

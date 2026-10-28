@@ -24,7 +24,7 @@ $ExcludeDirNames = [System.Collections.Generic.HashSet[string]]::new(
 $ExcludeFileNames = [System.Collections.Generic.HashSet[string]]::new(
   [string[]]@(
     'rename-to-woosau.bat',
-    'rename-to-jackwener.bat',
+    'restore-to-jackwener.bat',
     'deploy-rename.sh',
     'deploy.cmd',
     'publish.bat',
@@ -106,5 +106,5 @@ if ($failed.Count -gt 0) {
 }
 Write-Host "NOTE: temporary local rename for publish — do not commit."
 if ($Direction -eq 'to-woosau') {
-  Write-Host "Next: npm run build && publish.bat   then rename-to-jackwener.bat"
+  Write-Host "Next: npm run build && publish.bat   then restore-to-jackwener.bat"
 }
