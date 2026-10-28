@@ -1,35 +1,16 @@
 import { BrowserBridge, CDPBridge } from './browser/index.js';
 import type { IPage } from './types.js';
 import { TimeoutError } from './errors.js';
-import { isElectronApp } from './electron-apps.js';
 import { DEFAULT_BROWSER_COMMAND_TIMEOUT, DEFAULT_BROWSER_CONNECT_TIMEOUT } from './browser/config.js';
 
 export { DEFAULT_BROWSER_COMMAND_TIMEOUT, DEFAULT_BROWSER_CONNECT_TIMEOUT };
 
 /**
- * Returns the appropriate browser factory based on explicit configuration and site type.
- * A manual CDP endpoint takes precedence, registered Electron apps use CDPBridge,
- * and all other sites use BrowserBridge.
+ * Returns the appropriate browser factory based on explicit configuration.
+ * A manual CDP endpoint uses CDPBridge; otherwise use BrowserBridge.
  */
-export function getConfiguredCdpEndpoint(): string | undefined {
-  const endpoint = process.env.OPENCLI_CDP_ENDPOINT?.trim();
-  return endpoint || undefined;
-}
-
-/** CLI --cdp-endpoint wins over pre-existing env for this process. */
-export function applyCdpEndpointFromCli(cliEndpoint?: string): void {
-  const v = cliEndpoint?.trim();
-  if (v) process.env.OPENCLI_CDP_ENDPOINT = v;
-}
-
-/**
- * Returns the appropriate browser factory based on site type / env.
- * CDPBridge when OPENCLI_CDP_ENDPOINT is set or the site is a registered
- * Electron app; otherwise BrowserBridge (daemon + extension).
- */
-export function getBrowserFactory(site?: string): new () => IBrowserFactory {
+export function getBrowserFactory(): new () => IBrowserFactory {
   if (process.env.OPENCLI_CDP_ENDPOINT) return CDPBridge;
-  if (site && isElectronApp(site)) return CDPBridge;
   return BrowserBridge;
 }
 
