@@ -19,7 +19,7 @@ import { getAttributesResolvedJs, getTextResolvedJs, getValueResolvedJs, isAutoc
 import { EXIT_CODES, getErrorMessage } from '../errors.js';
 import { installCommanderNamespaceStructuredHelp } from '../help.js';
 import { log } from '../logger.js';
-import { applyCdpEndpointFromCli, getBrowserFactory, type BrowserWindowMode } from '../runtime.js';
+import { applyCdpEndpointFromCli, getBrowserFactory, type BrowserWindowMode, type IBrowserFactory } from '../runtime.js';
 import type { BrowserDownloadWaitResult, IPage, ScreenshotOptions } from '../types.js';
 
 
@@ -210,7 +210,7 @@ function hasBrowserTabTarget(tabs: unknown[], targetPage: string): boolean {
 }
 
 async function resolveBrowserTargetInSession(
-  page: import('../types.js').IPage,
+  page: Awaited<ReturnType<typeof getBrowserPage>>,
   targetPage: string,
   opts: { scope: string; source: 'explicit' | 'saved' },
 ): Promise<string | undefined> {
@@ -251,7 +251,7 @@ function getBrowserScope(session: string, contextId?: string): string {
   return contextId ? `${contextId}:${session}` : session;
 }
 
-async function resolveStoredBrowserTarget(page: import('../types.js').IPage, scope: string): Promise<string | undefined> {
+async function resolveStoredBrowserTarget(page: Awaited<ReturnType<typeof getBrowserPage>>, scope: string): Promise<string | undefined> {
   const defaultPage = loadBrowserTargetState(scope)?.defaultPage?.trim();
   if (!defaultPage) return undefined;
   return resolveBrowserTargetInSession(page, defaultPage, { scope, source: 'saved' });
@@ -259,14 +259,12 @@ async function resolveStoredBrowserTarget(page: import('../types.js').IPage, sco
 
 /** Create a browser page for browser commands. Uses a named browser session for continuity. */
 async function getBrowserPage(
+  bridge: IBrowserFactory,
   session: string,
   targetPage?: string,
   profileSelection?: ProfileSelection,
   opts: { windowMode?: BrowserWindowMode } = {},
-): Promise<{ page: import('../types.js').IPage; dispose: () => Promise<void> }> {
-  // OPENCLI_CDP_ENDPOINT / --cdp-endpoint → CDPBridge; otherwise BrowserBridge.
-  const BrowserFactory = getBrowserFactory();
-  const bridge = new BrowserFactory();
+): Promise<IPage> {
   // Internal GC timeout for browser sessions. Not the per-command runtime timeout.
   const envTimeout = process.env.OPENCLI_BROWSER_IDLE_TIMEOUT;
   const idleTimeout = envTimeout ? parseInt(envTimeout, 10) : undefined;
@@ -288,9 +286,7 @@ async function getBrowserPage(
     }
     page.setActivePage(resolvedTargetPage);
   }
-  // CDP keeps a live WebSocket; always dispose so the process can exit.
-  // BrowserBridge.close() only drops the local page ref (daemon stays up).
-  return { page, dispose: () => bridge.close().catch(() => {}) };
+  return page;
 }
 
 function getBrowserWindowMode(command: Command | undefined, defaultMode: BrowserWindowMode): BrowserWindowMode {
@@ -535,9 +531,11 @@ export function registerBrowserCommands(program: Command): Command {
   }
 
   /** Wrap browser actions with error handling and optional --json output */
-  function browserAction<Args extends unknown[]>(fn: (page: import('../types.js').IPage, ...args: Args) => Promise<unknown>) {
+  function browserAction<Args extends unknown[]>(fn: (page: Awaited<ReturnType<typeof getBrowserPage>>, ...args: Args) => Promise<unknown>) {
     return browserLifecycle(async (...args: Args) => {
-      let dispose: (() => Promise<void>) | null = null;
+      // OPENCLI_CDP_ENDPOINT / --cdp-endpoint → CDPBridge; otherwise BrowserBridge.
+      // Caller owns bridge lifetime so CDP WebSockets are closed and the process can exit.
+      let bridge: IBrowserFactory | null = null;
       try {
         const command = args.at(-1) instanceof Command ? args.at(-1) as Command : undefined;
         const cdpEndpointOpt = getCommandOption(command, 'cdpEndpoint');
@@ -546,14 +544,14 @@ export function registerBrowserCommands(program: Command): Command {
         const session = getBrowserSession(command);
         const profileSelection = getBrowserProfileSelection(command);
         const windowMode = getBrowserWindowMode(command, 'foreground');
-        const sessionHandle = await getBrowserPage(session, targetPage, profileSelection, { windowMode });
-        dispose = sessionHandle.dispose;
-        await fn(sessionHandle.page, ...args);
+        bridge = new (getBrowserFactory())();
+        const page = await getBrowserPage(bridge, session, targetPage, profileSelection, { windowMode });
+        await fn(page, ...args);
       } catch (err) {
         if (isJavaScriptDialogMessage(getErrorMessage(err))) emitJavaScriptDialogError(getErrorMessage(err));
         else emitFailure(err);
       } finally {
-        if (dispose) await dispose();
+        if (bridge) await bridge.close().catch(() => {});
       }
     });
   }

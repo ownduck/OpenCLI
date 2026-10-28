@@ -20,7 +20,9 @@ if errorlevel 1 (
 if "%OPENCLI_NPM_TAG%"=="" (set TAG=latest) else (set TAG=%OPENCLI_NPM_TAG%)
 
 echo Publishing with tag %TAG%...
-call npm publish --access public --tag %TAG%
+REM provenance only works in CI (OIDC). Local publish must disable it even if
+REM package.json has publishConfig.provenance=true.
+call npm publish --access public --tag %TAG% --provenance=false
 if errorlevel 1 (
   echo Publish failed.
   pause
