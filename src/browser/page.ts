@@ -13,7 +13,7 @@ import type { BrowserCookie, BrowserDownloadWaitResult, BrowserEvaluateFunction,
 import { sendCommand, sendCommandFull } from './daemon-client.js';
 import { buildEvaluateExpression } from './utils.js';
 import { saveBase64ToFile } from '../utils.js';
-import { generateStealthJs } from './stealth.js';
+import { generateStealthJs, isStealthEnabled } from './stealth.js';
 import { waitForDomStableJs } from './dom-helpers.js';
 import { CDPBasePage, NativeInputVisibilityError } from './base-page.js';
 import { classifyBrowserError } from './errors.js';
@@ -118,7 +118,8 @@ export class Page extends CDPBasePage {
     // The stealth guard flag prevents double-injection; settle uses DOM stability detection.
     if (options?.waitUntil !== 'none') {
       const maxMs = options?.settleMs ?? 1000;
-      const combinedCode = `${generateStealthJs()};\n${waitForDomStableJs(maxMs, Math.min(500, maxMs))}`;
+      const settleCode = waitForDomStableJs(maxMs, Math.min(500, maxMs));
+      const combinedCode = isStealthEnabled() ? `${generateStealthJs()};\n${settleCode}` : settleCode;
       const combinedOpts = {
         code: combinedCode,
         ...this._cmdOpts(),
@@ -138,7 +139,7 @@ export class Page extends CDPBasePage {
           if (classifyBrowserError(retryErr).kind !== 'target-navigation') throw retryErr;
         }
       }
-    } else {
+    } else if (isStealthEnabled()) {
       // Even with waitUntil='none', still inject stealth (best-effort)
       try {
         await sendCommand('exec', {

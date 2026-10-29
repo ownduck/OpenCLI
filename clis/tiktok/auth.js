@@ -1,10 +1,14 @@
 import { AuthRequiredError } from '@jackwener/opencli/errors';
 import { registerSiteAuthCommands } from '../_shared/site-auth.js';
 
+/** Pages that already did a one-shot /setting rehydrate during login poll. */
+const rehydratedDuringPoll = new WeakSet();
+
 async function hasTiktokSessionCookie(page) {
   const cookies = await page.getCookies({ url: 'https://www.tiktok.com' });
   const names = new Set(cookies.map(c => c.name));
-  return names.has('sessionid') || names.has('sid_tt') || names.has('uid_tt');
+  // Keep in sync with verifyTiktokIdentity — sid_tt/uid_tt alone are not a session.
+  return names.has('sessionid') || names.has('sessionid_ss');
 }
 
 const READ_IDENTITY_JS = `(() => {
@@ -55,9 +59,12 @@ async function verifyTiktokIdentity(page, { phase } = {}) {
   if (current?.username) {
     return { sec_uid: current.sec_uid || '', username: current.username, nickname: current.nickname || '' };
   }
-  if (phase === 'poll') {
+  // poll: avoid navigating every tick (was a foryou loop). Allow a single rehydrate
+  // when cookies exist but this CDP tab is still the login leftover / OAuth sibling.
+  if (phase === 'poll' && rehydratedDuringPoll.has(page)) {
     throw new AuthRequiredError('www.tiktok.com', 'TikTok identity not rendered on the current page yet');
   }
+  if (phase === 'poll') rehydratedDuringPoll.add(page);
   await page.goto('https://www.tiktok.com/setting');
   await page.wait(2);
   const info = await page.evaluate(READ_IDENTITY_JS).catch(() => null);

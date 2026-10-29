@@ -19,6 +19,7 @@ import { getAttributesResolvedJs, getTextResolvedJs, getValueResolvedJs, isAutoc
 import { EXIT_CODES, getErrorMessage } from '../errors.js';
 import { installCommanderNamespaceStructuredHelp } from '../help.js';
 import { log } from '../logger.js';
+import { applyStealthFromCli } from '../browser/stealth.js';
 import { applyCdpEndpointFromCli, getBrowserFactory, type BrowserWindowMode, type IBrowserFactory } from '../runtime.js';
 import type { BrowserDownloadWaitResult, IPage, ScreenshotOptions } from '../types.js';
 
@@ -540,6 +541,8 @@ export function registerBrowserCommands(program: Command): Command {
         const command = args.at(-1) instanceof Command ? args.at(-1) as Command : undefined;
         const cdpEndpointOpt = getCommandOption(command, 'cdpEndpoint');
         applyCdpEndpointFromCli(typeof cdpEndpointOpt === 'string' ? cdpEndpointOpt : undefined);
+        const stealthOpt = getCommandOption(command, 'stealth');
+        applyStealthFromCli(typeof stealthOpt === 'string' ? stealthOpt : undefined);
         const targetPage = getBrowserTargetId(command);
         const session = getBrowserSession(command);
         const profileSelection = getBrowserProfileSelection(command);
@@ -568,6 +571,8 @@ export function registerBrowserCommands(program: Command): Command {
       try {
         const cdpEndpointOpt = getCommandOption(command, 'cdpEndpoint');
         applyCdpEndpointFromCli(typeof cdpEndpointOpt === 'string' ? cdpEndpointOpt : undefined);
+        const stealthOpt = getCommandOption(command, 'stealth');
+        applyStealthFromCli(typeof stealthOpt === 'string' ? stealthOpt : undefined);
         const session = getBrowserSession(command);
         const profileSelection = getBrowserProfileSelection(command);
         const contextId = profileSelection?.contextId;

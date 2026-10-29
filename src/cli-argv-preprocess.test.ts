@@ -123,4 +123,9 @@ describe('hoistTrailingRootCdpEndpoint', () => {
     expect(hoistTrailingRootCdpEndpoint(['boss', 'detail', '--', '--cdp-endpoint', 'http://127.0.0.1:9222']))
       .toEqual(['boss', 'detail', '--', '--cdp-endpoint', 'http://127.0.0.1:9222']);
   });
+
+  it('hoists trailing --stealth with --cdp-endpoint', () => {
+    expect(hoistTrailingRootCdpEndpoint(['tiktok', 'login', '--stealth', '0', '--cdp-endpoint', 'http://127.0.0.1:9225']))
+      .toEqual(['--cdp-endpoint', 'http://127.0.0.1:9225', '--stealth', '0', 'tiktok', 'login']);
+  });
 });

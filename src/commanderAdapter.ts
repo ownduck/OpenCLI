@@ -13,6 +13,7 @@
 import { Command } from 'commander';
 import { emitFailure } from './command-output.js';
 import { executeCommand, prepareCommandArgs } from './execution.js';
+import { applyStealthFromCli } from './browser/stealth.js';
 import { applyCdpEndpointFromCli } from './runtime.js';
 import {
   commandHelpData,
@@ -111,6 +112,7 @@ export function registerCommandToProgram(siteCmd: Command, cmd: CliCommand): voi
       if (verbose) process.env.OPENCLI_VERBOSE = '1';
       const globals = typeof subCmd.optsWithGlobals === 'function' ? subCmd.optsWithGlobals() as Record<string, unknown> : {};
       applyCdpEndpointFromCli(typeof globals.cdpEndpoint === 'string' ? globals.cdpEndpoint : undefined);
+      applyStealthFromCli(typeof globals.stealth === 'string' ? globals.stealth : undefined);
       const result = await executeCommand(cmd, kwargs, verbose, {
         prepared: true,
         ...(typeof globals.profile === 'string' && globals.profile.trim() ? { profile: globals.profile.trim() } : {}),

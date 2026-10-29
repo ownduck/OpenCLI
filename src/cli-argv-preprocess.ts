@@ -11,7 +11,7 @@ export interface DashPositionalManifestEntry {
 }
 
 /** Keep in sync with `program.option(...)` value-taking flags in cli.ts. */
-const ROOT_VALUE_FLAGS: ReadonlySet<string> = new Set(['--profile', '--cdp-endpoint']);
+const ROOT_VALUE_FLAGS: ReadonlySet<string> = new Set(['--profile', '--cdp-endpoint', '--stealth']);
 
 type OptionValueMode = 'none' | 'required' | 'optional';
 type OptionParse = { values: string[]; nextIndex: number };
@@ -150,23 +150,24 @@ export function escapeLeadingDashPositional(
  * Needed because `--cdp-endpoint` is a root program option; trailing use such as
  * `browser state --session work --cdp-endpoint http://127.0.0.1:9222` would
  * otherwise be treated as an unknown leaf option.
+ * Also hoists trailing `--stealth`.
  */
 export function hoistTrailingRootCdpEndpoint(argv: readonly string[]): string[] {
   const result = [...argv];
-  for (let i = 0; i < result.length; i += 1) {
-    const tok = result[i];
-    if (tok === '--') return result;
-    if (tok.startsWith('--cdp-endpoint=')) {
-      const removed = result.splice(i, 1);
-      result.unshift(...removed);
-      return result;
-    }
-    if (tok === '--cdp-endpoint') {
-      const value = result[i + 1];
-      if (value === undefined || value === '--') return result;
-      const removed = result.splice(i, 2);
-      result.unshift(...removed);
-      return result;
+  for (const flag of ['--stealth', '--cdp-endpoint']) {
+    for (let i = 0; i < result.length; i += 1) {
+      const tok = result[i];
+      if (tok === '--') break;
+      if (tok.startsWith(`${flag}=`)) {
+        result.unshift(...result.splice(i, 1));
+        break;
+      }
+      if (tok === flag) {
+        const value = result[i + 1];
+        if (value === undefined || value === '--') break;
+        result.unshift(...result.splice(i, 2));
+        break;
+      }
     }
   }
   return result;

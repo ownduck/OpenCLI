@@ -54,6 +54,7 @@ export function createProgram(BUILTIN_CLIS: string, USER_CLIS: string): Command 
     .version(PKG_VERSION)
     .option('--profile <name>', 'Chrome profile/context alias for Browser Bridge commands')
     .option('--cdp-endpoint <url>', 'CDP endpoint; overrides OPENCLI_CDP_ENDPOINT; skips Chrome extension')
+    .option('--stealth <0|1>', 'Stealth injection for CDP/Bridge (1=on, 0=off); default 1')
     .enablePositionalOptions()
     .exitOverride()
     .configureOutput({ writeErr: () => {} });

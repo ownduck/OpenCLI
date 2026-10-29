@@ -43,6 +43,7 @@ vi.mock('ws', () => ({
 }));
 
 import { CDPBridge, CDP_REQUEST_BODY_CAPTURE_LIMIT } from './cdp.js';
+import { applyStealthFromCli } from './stealth.js';
 
 describe('CDPBridge cookies', () => {
   beforeEach(() => {
@@ -360,6 +361,19 @@ describe('CDPBridge init script', () => {
     await bridge.connect();
 
     expect(initScripts(send.mock.calls)).toHaveLength(1);
+    await bridge.close();
+  });
+
+  it('skips stealth after applyStealthFromCli(0)', async () => {
+    vi.stubEnv('OPENCLI_CDP_ENDPOINT', 'ws://127.0.0.1:9222/devtools/page/1');
+    applyStealthFromCli('0');
+
+    const bridge = new CDPBridge();
+    const send = vi.spyOn(bridge, 'send').mockResolvedValue({});
+    await bridge.connect();
+
+    expect(initScripts(send.mock.calls)).toHaveLength(0);
+    applyStealthFromCli('1');
     await bridge.close();
   });
 });

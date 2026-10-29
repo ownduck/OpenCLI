@@ -15,7 +15,7 @@ import { readFileSync, statSync } from 'node:fs';
 import type { BrowserCookie, BrowserEvaluateFunction, IPage, ScreenshotOptions } from '../types.js';
 import type { IBrowserFactory } from '../runtime.js';
 import { buildEvaluateExpression } from './utils.js';
-import { generateStealthJs } from './stealth.js';
+import { generateStealthJs, isStealthEnabled } from './stealth.js';
 import { waitForDomStableJs } from './dom-helpers.js';
 import { isRecord, saveBase64ToFile } from '../utils.js';
 import { CommandExecutionError } from '../errors.js';
@@ -92,7 +92,9 @@ export class CDPBridge implements IBrowserFactory {
         this._ws = ws;
         try {
           await this.send('Page.enable');
-          await this.send('Page.addScriptToEvaluateOnNewDocument', { source: generateStealthJs() });
+          if (isStealthEnabled()) {
+            await this.send('Page.addScriptToEvaluateOnNewDocument', { source: generateStealthJs() });
+          }
           // Optional caller script for every new document, e.g. state a headless peer cannot share across connections.
           if (initSource !== undefined) await this.send('Page.addScriptToEvaluateOnNewDocument', { source: initSource });
         } catch (err) {

@@ -9,6 +9,21 @@
  * Inspired by puppeteer-extra-plugin-stealth.
  */
 
+/** Process-local `--stealth` (default on). Shared by CDP and Bridge. */
+let stealthEnabled = true;
+
+export function applyStealthFromCli(raw?: string): void {
+  const v = raw?.trim();
+  if (!v) return;
+  if (v === '0') stealthEnabled = false;
+  else if (v === '1') stealthEnabled = true;
+  else throw new Error(`--stealth must be 0 or 1 (got "${raw}")`);
+}
+
+export function isStealthEnabled(): boolean {
+  return stealthEnabled;
+}
+
 /**
  * Return a self-contained JS string that, when evaluated in a page context,
  * applies all stealth patches. Safe to call multiple times — the guard flag
