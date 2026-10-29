@@ -1,6 +1,6 @@
 {
   "name": "@woosau/opencli",
-  "version": "2.0.2-261029.1",
+  "version": "2.0.2-261029.3",
   "publishConfig": {
     "access": "public",
     "provenance": true

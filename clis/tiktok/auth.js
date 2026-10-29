@@ -1,13 +1,14 @@
 import { AuthRequiredError } from '@jackwener/opencli/errors';
 import { registerSiteAuthCommands } from '../_shared/site-auth.js';
 
-/** Pages that already did a one-shot /setting rehydrate during login poll. */
+/** One-shot /setting rehydrate after cookies newly appear during login poll. */
 const rehydratedDuringPoll = new WeakSet();
+/** Pages that observed missing session cookies during this login poll. */
+const sawMissingCookie = new WeakSet();
 
 async function hasTiktokSessionCookie(page) {
   const cookies = await page.getCookies({ url: 'https://www.tiktok.com' });
   const names = new Set(cookies.map(c => c.name));
-  // Keep in sync with verifyTiktokIdentity — sid_tt/uid_tt alone are not a session.
   return names.has('sessionid') || names.has('sessionid_ss');
 }
 
@@ -49,29 +50,40 @@ const READ_IDENTITY_JS = `(() => {
   return m ? { sec_uid: '', username: decodeURIComponent(m[1]), nickname: '' } : null;
 })()`;
 
-async function verifyTiktokIdentity(page, { phase } = {}) {
+async function readIdentity(page) {
+  const info = await page.evaluate(READ_IDENTITY_JS).catch(() => null);
+  if (!info?.username) return null;
+  return { sec_uid: info.sec_uid || '', username: info.username, nickname: info.nickname || '' };
+}
+
+async function verifyTiktokIdentity(page, { phase, allowRehydrate } = {}) {
   const cookies = await page.getCookies({ url: 'https://www.tiktok.com' });
   const names = new Set(cookies.map(c => c.name));
   if (!names.has('sessionid') && !names.has('sessionid_ss')) {
     throw new AuthRequiredError('www.tiktok.com', 'TikTok session cookie (sessionid) missing');
   }
-  const current = await page.evaluate(READ_IDENTITY_JS).catch(() => null);
-  if (current?.username) {
-    return { sec_uid: current.sec_uid || '', username: current.username, nickname: current.nickname || '' };
-  }
-  // poll: avoid navigating every tick (was a foryou loop). Allow a single rehydrate
-  // when cookies exist but this CDP tab is still the login leftover / OAuth sibling.
-  if (phase === 'poll' && rehydratedDuringPoll.has(page)) {
+  const current = await readIdentity(page);
+  if (current) return current;
+
+  // login precheck / normal poll: do not navigate — avoids refresh storms before the user can log in.
+  // Only rehydrate once when cookies newly appear mid-poll (OAuth finished on this or a sibling tab).
+  if (phase === 'login-precheck' || (phase === 'poll' && !allowRehydrate)) {
     throw new AuthRequiredError('www.tiktok.com', 'TikTok identity not rendered on the current page yet');
   }
-  if (phase === 'poll') rehydratedDuringPoll.add(page);
+  if (phase === 'poll') {
+    if (rehydratedDuringPoll.has(page)) {
+      throw new AuthRequiredError('www.tiktok.com', 'TikTok identity not rendered on the current page yet');
+    }
+    rehydratedDuringPoll.add(page);
+  }
+
   await page.goto('https://www.tiktok.com/setting');
   await page.wait(2);
-  const info = await page.evaluate(READ_IDENTITY_JS).catch(() => null);
-  if (!info?.username) {
+  const info = await readIdentity(page);
+  if (!info) {
     throw new AuthRequiredError('www.tiktok.com', 'TikTok universal data has no owner user — identity not rehydrated');
   }
-  return { sec_uid: info.sec_uid || '', username: info.username, nickname: info.nickname || '' };
+  return info;
 }
 
 registerSiteAuthCommands({
@@ -83,8 +95,11 @@ registerSiteAuthCommands({
   verify: verifyTiktokIdentity,
   poll: async (page, options) => {
     if (!await hasTiktokSessionCookie(page)) {
+      sawMissingCookie.add(page);
       throw new AuthRequiredError('www.tiktok.com', 'Waiting for TikTok session cookies');
     }
-    return verifyTiktokIdentity(page, options);
+    const justGotCookies = sawMissingCookie.has(page);
+    if (justGotCookies) sawMissingCookie.delete(page);
+    return verifyTiktokIdentity(page, { ...options, allowRehydrate: justGotCookies });
   },
 });

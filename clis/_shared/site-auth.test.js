@@ -56,6 +56,7 @@ describe('site auth command helper', () => {
   });
 
   it('login opens the login URL and polls until authenticated', async () => {
+    const verify = vi.fn(async () => { throw new AuthRequiredError('example.com', 'missing'); });
     const poll = vi.fn()
       .mockRejectedValueOnce(new AuthRequiredError('example.com', 'not yet'))
       .mockResolvedValueOnce({ username: 'alice' });
@@ -64,7 +65,7 @@ describe('site auth command helper', () => {
       domain: 'example.com',
       loginUrl: 'https://example.com/login',
       columns: ['username'],
-      verify: async () => { throw new AuthRequiredError('example.com', 'missing'); },
+      verify,
       poll,
     });
     const cmd = getRegistry().get('auth-helper-login/login');
@@ -76,6 +77,8 @@ describe('site auth command helper', () => {
       site: 'auth-helper-login',
       username: 'alice',
     });
+    expect(verify).toHaveBeenCalledWith(page, { phase: 'login-precheck' });
+    expect(page.goto).toHaveBeenCalledTimes(1);
     expect(page.goto).toHaveBeenCalledWith('https://example.com/login');
     expect(page.wait).toHaveBeenCalled();
     expect(poll).toHaveBeenCalledTimes(2);

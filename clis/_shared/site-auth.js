@@ -89,7 +89,8 @@ export function registerSiteAuthCommands(config) {
     columns: ['status', ...commandColumns(config)],
     func: async (page, kwargs) => {
       try {
-        return { status: 'already_logged_in', ...await tryProbe(config, page, 'identity') };
+        // login-precheck: adapters may soft-fail without navigating (avoids refresh storms).
+        return { status: 'already_logged_in', ...await tryProbe(config, page, 'login-precheck') };
       } catch (error) {
         if (!isAuthRequired(error)) throw error;
       }
