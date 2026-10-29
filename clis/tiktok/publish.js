@@ -1,7 +1,7 @@
 /**
  * TikTok publish — Playwright connectOverCDP。
  * 控件用 data-e2e / role / 按钮顺序，不靠界面文案（语言会变）。
- * 弹窗约定：左次要 / 右主操作 → 确认 Discard、Post now 均点 dialog 内最后一个 button。
+ * 弹窗约定：左次要 / 右主操作 → 确认 Discard、Post now、自动内容检查均点 dialog 内最后一个 button。
  */
 import { cli, Strategy } from '@jackwener/opencli/registry';
 import { CommandExecutionError } from '@jackwener/opencli/errors';
@@ -45,11 +45,39 @@ async function dialogButton(dialog, index) {
   return btn;
 }
 
+/** 自动内容检查弹窗：带 checkbox（与 Discard / Continue 区分） */
+function autoContentCheckDialog(page) {
+  return page.locator('[role="dialog"]').filter({
+    has: page.locator('input[type="checkbox"], [role="checkbox"]'),
+  }).first();
+}
+
+async function dismissAutoContentCheckModal(page, { waitMs = 1500 } = {}) {
+  const dialog = autoContentCheckDialog(page);
+  if (!(await dialog.isVisible({ timeout: waitMs }).catch(() => false))) return false;
+  const btn = await dialogButton(dialog, -1);
+  if (!btn) return false;
+  const box = await btn.boundingBox().catch(() => null);
+  log.status(`· 关闭自动内容检查弹窗（主按钮）` + (box ? ` @${Math.round(box.x)},${Math.round(box.y)}` : ''));
+  await btn.click({ force: true });
+  await dialog.waitFor({ state: 'hidden', timeout: 15000 }).catch(() => {});
+  if (await dialog.isVisible().catch(() => false)) {
+    await mouseClickLocator(page, btn).catch(() => {});
+    await dialog.waitFor({ state: 'hidden', timeout: 10000 }).catch(() => {});
+  }
+  if (await dialog.isVisible().catch(() => false)) {
+    throw new CommandExecutionError('自动内容检查弹窗未能关闭', SITE_HINT);
+  }
+  return true;
+}
+
 /** 关闭 Discard 确认：点 dialog 最后一个 button（粉色 Discard） */
 async function confirmDiscardPost(page, { waitMs = 4000 } = {}) {
+  if (await autoContentCheckDialog(page).isVisible().catch(() => false)) {
+    return dismissAutoContentCheckModal(page, { waitMs: Math.min(waitMs, 1500) });
+  }
   const confirm = anyDialog(page);
   if (!(await confirm.isVisible({ timeout: waitMs }).catch(() => false))) return false;
-  // 上传页此时不应再点到底部 discard_post_button；确认框内 last = Discard
   const btn = await dialogButton(confirm, -1);
   if (!btn) return false;
   const box = await btn.boundingBox().catch(() => null);
@@ -120,12 +148,14 @@ async function ensureDiscardClosed(page, {
   else log.status(`· 未出现 Discard 确认框，继续${label}`);
 }
 
-/**
- * Checks 未完成 → Continue to post：点 dialog 最后一个 button（Post now）。
- */
+/** Checks 未完成 → Continue to post：点 dialog 最后一个 button（Post now） */
 async function confirmContinueToPost(page, { waitMs = 5000 } = {}) {
+  if (await dismissAutoContentCheckModal(page, { waitMs: Math.min(800, waitMs) })) return true;
   const dialog = anyDialog(page);
   if (!(await dialog.isVisible({ timeout: waitMs }).catch(() => false))) return false;
+  if (await autoContentCheckDialog(page).isVisible().catch(() => false)) {
+    return dismissAutoContentCheckModal(page, { waitMs: 800 });
+  }
   const postNow = await dialogButton(dialog, -1);
   if (!postNow) return false;
   const box = await postNow.boundingBox().catch(() => null);
@@ -161,11 +191,11 @@ async function waitTikTokPublished(page, timeoutMs) {
     const captionVisible = await page.locator('[data-e2e="caption_container"]').first().isVisible().catch(() => false);
     if (!postVisible && !captionVisible && !/\/upload/i.test(url)) return true;
 
+    await dismissAutoContentCheckModal(page, { waitMs: 400 }).catch(() => {});
     await confirmContinueToPost(page, { waitMs: 800 });
 
-    // 仍停在 upload 且弹出 dialog：若刚点完 Post 却像 Discard，点左按钮保住内容并报错
     if (/\/upload/i.test(url) && postVisible && await anyDialog(page).isVisible().catch(() => false)) {
-      // 再试一次主按钮（Continue to post）
+      if (await dismissAutoContentCheckModal(page, { waitMs: 400 }).catch(() => false)) continue;
       const again = await confirmContinueToPost(page, { waitMs: 500 });
       if (!again && await anyDialog(page).isVisible().catch(() => false)) {
         await dismissDiscardKeepDraft(page);
@@ -270,7 +300,6 @@ cli({
           await page.locator('[data-e2e="caption_container"] [contenteditable="true"], video, [data-e2e="upload_status_container"]').first()
             .waitFor({ state: 'visible', timeout: 120000 });
           log.status('· 视频已提交');
-          // 上传后偶发提示 dialog：点主按钮关掉
           await confirmContinueToPost(page, { waitMs: 1200 }).catch(() => {});
         }, 2.4, 4.0);
 
@@ -291,9 +320,11 @@ cli({
           await setWhenToPostNow(page);
           await randomWait(page, 300, 600);
           await setVisibilityEveryone(page);
+          await dismissAutoContentCheckModal(page, { waitMs: 1200 }).catch(() => {});
         }, 0.8, 1.6);
 
         const pub = await step(page, PHASE.publish, async () => {
+          await dismissAutoContentCheckModal(page, { waitMs: 1500 }).catch(() => {});
           const btn = page.locator('[data-e2e="post_video_button"]').first();
           await btn.waitFor({ state: 'visible', timeout: 60000 });
           await btn.scrollIntoViewIfNeeded();
@@ -312,11 +343,14 @@ cli({
           return statusRow('dry_run');
         }
 
+        await dismissAutoContentCheckModal(page, { waitMs: 2000 }).catch(() => {});
         await ensureDiscardClosed(page, { settleSec: 0.8, pollMs: 3000, label: '点击 Post' });
+        await dismissAutoContentCheckModal(page, { waitMs: 800 }).catch(() => {});
 
         await pub.loc.scrollIntoViewIfNeeded();
         await mouseClickLocator(page, pub.loc, 'Post');
         await humanWait(page, 1.0, 1.8);
+        await dismissAutoContentCheckModal(page, { waitMs: 1500 }).catch(() => {});
         await confirmContinueToPost(page, { waitMs: 6000 });
         await humanWait(page, 1.5, 2.5);
         await step(page, PHASE.result, () => waitTikTokPublished(page, Math.max(90000, timeout * 1000)), 1.0, 1.8);
